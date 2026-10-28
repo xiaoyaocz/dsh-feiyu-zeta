@@ -1,7 +1,7 @@
 /**
  * dsh-feiyu-zeta 浏览器半边 —— QQ 接入与陪伴功能入口
  *
- * 宿主插件在凭据缺失时注册 /qqbot/im-qqbot/bind 状态路由；本插件在
+ * 宿主插件在凭据缺失时注册共享协议中的绑定状态路由；本插件在
  * Web / Desktop 提供两个展示位：
  *
  * 1. 设置页「QQ Bot」栏目（settings.section 席位）——注册即展示，

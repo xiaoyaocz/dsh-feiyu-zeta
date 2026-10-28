@@ -7,15 +7,15 @@
  * 客户端 tsdown 构建会将其内联进 bundle。
  */
 /** 状态查询（绑定页轮询） */
-export declare const BIND_STATE_PATH = "/qqbot/im-qqbot/bind";
+export declare const BIND_STATE_PATH = "/plugins/dsh-feiyu-zeta/qqbot/bind";
 /** 刷新二维码（绑定页按钮） */
-export declare const BIND_REFRESH_PATH = "/qqbot/im-qqbot/bind/refresh";
+export declare const BIND_REFRESH_PATH = "/plugins/dsh-feiyu-zeta/qqbot/bind/refresh";
 /** 手动填写/编辑凭据（绑定页表单） */
-export declare const BIND_MANUAL_PATH = "/qqbot/im-qqbot/bind/manual";
+export declare const BIND_MANUAL_PATH = "/plugins/dsh-feiyu-zeta/qqbot/bind/manual";
 /** 解绑：移除已保存凭据，回到绑定流程 */
-export declare const BIND_UNBIND_PATH = "/qqbot/im-qqbot/bind/unbind";
+export declare const BIND_UNBIND_PATH = "/plugins/dsh-feiyu-zeta/qqbot/bind/unbind";
 /** 配置读写（设置面板表单） */
-export declare const BIND_CONFIG_PATH = "/qqbot/im-qqbot/config";
+export declare const BIND_CONFIG_PATH = "/plugins/dsh-feiyu-zeta/qqbot/config";
 /** 线上协议（HTTP 路由序列化形态） */
 export type BindStateWire = {
     phase: 'starting';

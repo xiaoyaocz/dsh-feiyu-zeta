@@ -4,7 +4,7 @@
 
 A **personal testing and self-use experiment** combining QQ chat, an evolving whale-inspired persona, memory, shared stickers, speech, autonomous activity and optional cloud services in one DeepSeek Harness plugin. It is not an official DeepSeek, Tencent Connect or service-provider product, and it carries no production stability guarantee.
 
-Current version: **0.4.4**. Target: **DeepSeek Harness 0.2.1-rc.3 exactly**, **Node.js >=24.9.0**. The former plugin name was `dsh-zeta`; this repository root contains the plugin itself.
+Current version: **0.4.5**. Target: **DeepSeek Harness 0.2.1-rc.3 exactly**, **Node.js >=24.9.0**. The former plugin name was `dsh-zeta`; this repository root contains the plugin itself.
 
 ## Install from GitHub
 
@@ -24,6 +24,19 @@ dsh plugin --profile web add github:xiaoyaocz/dsh-feiyu-zeta
 The default source follows the repository's default branch. Append `#main` to name the branch explicitly, or use `github:xiaoyaocz/dsh-feiyu-zeta#<full-40-character-commit-SHA>` to pin a build. Replace that placeholder with a real commit before use.
 
 `main` includes the complete prebuilt `dist/` and `lib/` files. Installation loads them directly and does not compile through `prepare`, `install` or `postinstall`. **Git and network access** are still required to fetch the repository and runtime dependencies; `node_modules` is not included. This package is not published to npm and has no marketplace entry or GitHub Release. On first use, configure a conversation model and bind QQ; existing bindings or environment credentials retain their connection behavior. Paid features are disabled by default and must be enabled separately.
+
+## fnOS installation and older 404 responses
+
+When using DSH through the [FNOSP/fnos-dsh](https://github.com/FNOSP/fnos-dsh) NAS app, install from the same GitHub source above. **Since 0.4.5**, binding, settings and companion HTTP endpoints share the `/plugins/dsh-feiyu-zeta/` prefix. The FNOS gateway already rewrites `/plugins` requests, so the new version does not require the two old proxy rules below.
+
+For **0.4.4**, if binding reports that the plugin is disabled or unsupported and configuration or companion requests return **404**, open **Plugins → fnOS details → “三方插件 proxy” (Third-party plugin proxy)** at the bottom. Keep existing rules and append:
+
+```text
+/qqbot/im-qqbot
+/zeta/api
+```
+
+Save and refresh the DSH page. This workaround is for the older absolute-path endpoints; retain other plugins' rules. See the pinned FNOS [gateway source](https://github.com/FNOSP/fnos-dsh/blob/5e6c64bd0137f2b658441bbb86eba8b8c42f8402/packages/fnos-gateway/src/client/bridge.ts#L26-L53) and [configuration guide](https://github.com/FNOSP/fnos-dsh/blob/5e6c64bd0137f2b658441bbb86eba8b8c42f8402/docs/plugins/dsh-fnos.md#L44-L51). This project has not completed validation on a physical fnOS NAS; see [VALIDATION.md](./VALIDATION.md) for the checks actually performed.
 
 ## Windows Desktop helper
 
@@ -51,9 +64,9 @@ npm run build
 npm run check:distribution
 npm pack
 
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz -WhatIf
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz -Profile desktop
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.5.tgz -WhatIf
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.5.tgz
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.5.tgz -Profile desktop
 ```
 
 The local `install.sh` helper supports an already installed DSH CLI. It accepts a local archive through `--package` and defaults to the `web` profile; see `./install.sh --help`.

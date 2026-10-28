@@ -7,7 +7,7 @@
  * 三值选择用分段控件（滑动指示器按段数/索引的 CSS 变量定位）；
  * 保存按钮为 DSW 反色主按钮（label-primary 底 + bg-layer-3 字）。
  *
- * 数据流：GET /qqbot/im-qqbot/config 回显当前生效配置（appSecret
+ * 数据流：GET BIND_CONFIG_PATH 回显当前生效配置（appSecret
  * 已由宿主剔除）→ 表单编辑 → dirty diff → POST 仅提交变更键 →
  * 宿主白名单 + Schema 校验 → 最小写入 profile patch → HMR 重载生效。
  *

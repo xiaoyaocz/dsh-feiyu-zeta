@@ -1,10 +1,23 @@
 # dsh-feiyu-zeta 验证范围与记录
 
-当前项目：[xiaoyaocz/dsh-feiyu-zeta](https://github.com/xiaoyaocz/dsh-feiyu-zeta)，版本 `0.4.4`。目标宿主为 DeepSeek Harness `0.2.1-rc.3`，Node.js `>=24.9.0`。
+当前项目：[xiaoyaocz/dsh-feiyu-zeta](https://github.com/xiaoyaocz/dsh-feiyu-zeta)，版本 `0.4.5`。目标宿主为 DeepSeek Harness `0.2.1-rc.3`，Node.js `>=24.9.0`。
 
 这是个人测试、自用实验项目。验证用于说明实际检查过的行为，不是生产稳定性承诺。更名前的旧包结果与更名后的新包结果分别记录。
 
-## 0.4.4 GitHub 安装适配
+## 0.4.5 fnOS 子路径兼容
+
+新客户端统一访问 `/plugins/dsh-feiyu-zeta/qqbot/...` 和 `/plugins/dsh-feiyu-zeta/api/...`。宿主同时保留 `/qqbot/im-qqbot/...`、`/zeta/api/...` 旧别名，使用相同业务处理、owner 准入和来源校验。管理 API 改为随 Web 服务就绪、替换及卸载注册和清理，避免仅在初始化时探测一次而漏注册。
+
+本轮实际检查：
+
+- `npm run check`、`npm run build` 通过；42 个测试文件共 511 项测试通过。新增真实 Cordis 生命周期检查覆盖服务晚就绪、等待 connection、替换 Web 服务、卸载清理及新旧接口准入。
+- `node scripts/verify-panel.mjs --fnos`：93 项 Chromium 检查通过。使用 FNOSP/fnos-dsh [`5e6c64bd0137f2b658441bbb86eba8b8c42f8402`](https://github.com/FNOSP/fnos-dsh/blob/5e6c64bd0137f2b658441bbb86eba8b8c42f8402/packages/fnos-gateway/src/client/bridge.ts) 的原始桥接代码及空 `customPaths`，在 `/app/fn-deepseek-harness` 子路径复现旧接口 404，并验证新接口的 QQ 绑定、最小配置保存、全部设置页、媒体预览、二进制备份下载及预览上传。上传密码头与文件字节保持一致，未执行恢复。结果：`output/qa-fnos-0.4.5/result.json`。
+- `node scripts/verify-panel.mjs`：普通根路径模式 83 项 Chromium 检查通过，结果：`output/qa-0.4.0/result.json`。
+- `node scripts/verify-host.mjs --package ./dsh-feiyu-zeta-0.4.5.tgz --output ./output/host-fnos-routes-0.4.5`：原生 DSH rc.3 在全新隔离 home 安装实际归档并重启，136 项检查通过（安装产物 10 项、首次运行 87 项、重启 39 项）。新 API 不被 `/plugins` 静态资源路由抢占，新旧接口均拒绝未登录请求，已登录 owner 可读取旧别名并使用新接口写入。首次运行调用本地假模型 14 次，重启零次，没有发送真实 QQ 消息或调用收费服务。
+
+以上为本地子路径模拟与原生宿主验证，尚未在 fnOS NAS 真机上验证。旧 0.4.4 的临时代理规则及操作入口见 [README.md](./README.md#fnos-安装与旧版-404-排查)。
+
+## 0.4.4 GitHub 安装适配（历史）
 
 仓库直接提交 `dist/`、`lib/` 及原有运行资源，不依赖安装时的编译钩子；保留精确宿主兼容要求。新增分发完整性检查和 GitHub CI，检查干净构建是否与提交的产物一致。
 

@@ -1,3 +1,9 @@
+/** Keep old clients working while all new requests use a proxy-safe namespace. */
+export function compatibleRoutePaths(path, currentPrefix, legacyPrefix) {
+    if (path !== currentPrefix && !path.startsWith(`${currentPrefix}/`))
+        throw new Error('兼容路由不属于当前插件前缀');
+    return [...new Set([path, `${legacyPrefix}${path.slice(currentPrefix.length)}`])];
+}
 /** Custom Web routes must explicitly use the Host's admission and owner policy. */
 export function ownerRoutes(ctx, server) {
     return { register: route => server.register({ ...route, handler: async (req, res) => {

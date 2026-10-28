@@ -1,5 +1,6 @@
 /** Offline smoke test of the actual settings component. No real accounts/services. */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { access, mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
@@ -10,9 +11,17 @@ import { rolldown } from 'rolldown';
 import { chromium } from 'playwright-core';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const output = path.join(root, 'output', 'qa-0.4.0');
 const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+const fnos = process.argv.includes('--fnos');
+const output = path.join(root, 'output', fnos ? `qa-fnos-${manifest.version}` : 'qa-0.4.0');
 const pluginName = 'dsh-feiyu-zeta';
+const apiPath = '/plugins/dsh-feiyu-zeta/api';
+const qqbot = '/plugins/dsh-feiyu-zeta/qqbot';
+const mount = fnos ? '/app/fn-deepseek-harness' : '';
+const bridgeCommit = '5e6c64bd0137f2b658441bbb86eba8b8c42f8402';
+const bridgeHash = '84adea769ffe90a3d59d71d1ec052dbf1b0bf6ddfb11a8b4186adf2378fdba49';
+const bridge = fnos ? await readFile(path.join(root, 'scripts/fixtures/fnos-gateway/bridge.js')) : undefined;
+if (bridge) assert.equal(createHash('sha256').update(bridge).digest('hex'), bridgeHash, 'FNOS bridge snapshot must match the pinned upstream bytes');
 assert.equal(manifest.name, pluginName);
 const require = createRequire(import.meta.url);
 const exists = async file => { try { await access(file); return true; } catch { return false; } };
@@ -30,7 +39,7 @@ const browserPath = process.env.ZETA_QA_BROWSER || (await Promise.all([
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
 ].map(async file => await exists(file) ? file : undefined))).find(Boolean);
-const bundle = await rolldown({ input: path.join(root, 'scripts/fixtures/panel-entry.ts'), plugins: [{ name: 'local-react', resolveId(source) {
+const bundle = await rolldown({ input: path.join(root, fnos ? 'scripts/fixtures/fnos-panel-entry.ts' : 'scripts/fixtures/panel-entry.ts'), plugins: [{ name: 'local-react', resolveId(source) {
   if (source === 'react') return require.resolve('react');
   if (source === 'react-dom/client') return domClient;
 } }] });
@@ -71,17 +80,37 @@ let persona = { id: 'persona-1', fileName: 'character.png', mimeType: 'image/png
 const images = [{ id: 'image-1', status: 'completed', createdAt: new Date().toISOString(), mimeType: 'image/png', delivery: 'not-requested', selfPortrait: true }, { id: 'image-2', taskId: 'task-existing', status: 'processing', createdAt: new Date().toISOString(), delivery: 'not-requested', selfPortrait: false }];
 let deployments = [{ id: 'preview-1', status: 'ready', previewUrl: 'https://public-fixture.example', expiresAt: new Date(Date.now() + 3600000).toISOString(), createdAt: new Date().toISOString() }];
 const records = [], checks = [], errors = [], saves = [], overflows = [];
+const unmapped = [], qqRequests = [];
+const backupBytes = Buffer.from('offline binary backup fixture\0\xff\x01', 'latin1');
+const qqConfig = { requireMention: true, streaming: true, showToolResults: false, access: { c2cMode: 'open', c2cAllow: [], groupMode: 'open', groupAllow: [] } };
 let rejectCredential = false;
 const check = (condition, label) => { assert.ok(condition, label); checks.push(label); };
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://fixture');
-    if (url.pathname === '/bundle.js') { res.setHeader('content-type', 'application/javascript'); res.end(code); return; }
-    if (!url.pathname.startsWith('/zeta/api/')) { res.setHeader('content-type', 'text/html; charset=utf-8'); res.end('<!doctype html><meta charset="utf-8"><style>body{margin:0;padding:12px;background:#fafafa}</style><div id="root"></div><script src="/bundle.js"></script>'); return; }
+    if (fnos && !url.pathname.startsWith(`${mount}/`)) { unmapped.push({ path: url.pathname, method: req.method }); res.writeHead(404); res.end('NAS root: this route is outside the app'); return; }
+    const pathname = mount ? url.pathname.slice(mount.length) : url.pathname;
+    if (pathname === '/bundle.js') { res.setHeader('content-type', 'application/javascript'); res.end(code); return; }
+    if (pathname === '/fnos-bridge.js' && bridge) { res.setHeader('content-type', 'application/javascript'); res.end(bridge); return; }
+    if (pathname === '/gateway-events' && fnos) { res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' }); res.write('event: paths\ndata: {"paths":[]}\n\n'); req.once('close', () => res.end()); return; }
+    if (pathname === '/') {
+      const setup = fnos ? `<script>window.__FNOS_GATEWAY_CONFIG__=${JSON.stringify({ prefix: mount, eventsPath: '/gateway-events', customPaths: [] })}</script><script src="${mount}/fnos-bridge.js"></script>` : '';
+      res.setHeader('content-type', 'text/html; charset=utf-8'); res.end(`<!doctype html><meta charset="utf-8"><style>body{margin:0;padding:12px;background:#fafafa}</style><div id="root"></div>${setup}<script src="${mount}/bundle.js"></script>`); return;
+    }
+    if (!pathname.startsWith(`${apiPath}/`) && !pathname.startsWith(`${qqbot}/`)) { res.writeHead(404); res.end('Unknown fixture path'); return; }
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
-    const data = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
-    const route = url.pathname.slice('/zeta/api'.length);
-    records.push({ path: route, method: req.method, ...(route === '/credential' ? { provider: data.provider, value: data.value === null ? null : '[redacted]' } : { body: route === '/backup/export' ? { ...data, password: '[redacted]' } : data }), query: url.search, ...(req.headers['x-zeta-identity-revision'] ? { identityRevision: req.headers['x-zeta-identity-revision'] } : {}) });
+    const raw = Buffer.concat(chunks), binary = req.headers['content-type'] === 'application/octet-stream';
+    const data = raw.length && !binary ? JSON.parse(raw.toString('utf8')) : {};
+    if (pathname.startsWith(`${qqbot}/`)) {
+      qqRequests.push({ path: pathname, wirePath: url.pathname, method: req.method, body: data });
+      let value;
+      if (pathname === `${qqbot}/bind`) value = { phase: 'bound', appId: 'fnos-fixture-bot' };
+      else if (pathname === `${qqbot}/config`) { if (req.method === 'POST') Object.assign(qqConfig, data); value = req.method === 'POST' ? { ok: true, message: '离线QQ配置已保存' } : { config: qqConfig }; }
+      else throw new Error(`Unexpected QQ fixture route: ${pathname}`);
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(value)); return;
+    }
+    const route = pathname.slice(apiPath.length);
+    records.push({ path: route, wirePath: url.pathname, method: req.method, ...(binary ? { binaryBytes: raw.length, binaryDigest: createHash('sha256').update(raw).digest('hex'), contentType: req.headers['content-type'], passwordHeaderValid: req.headers['x-zeta-backup-password'] === Buffer.from('offline-fnos-backup-password').toString('base64') } : route === '/credential' ? { provider: data.provider, value: data.value === null ? null : '[redacted]' } : { body: route === '/backup/export' ? { ...data, password: '[redacted]' } : data }), query: url.search, ...(req.headers['x-zeta-identity-revision'] ? { identityRevision: req.headers['x-zeta-identity-revision'] } : {}) });
     let value;
     if (route === '/media' && url.searchParams.get('kind') === 'speech') { res.setHeader('content-type', 'audio/wav'); res.end(wav); return; }
     if (['/persona/image', '/images/media', '/media'].includes(route)) { res.setHeader('content-type', 'image/png'); res.end(png); return; }
@@ -117,7 +146,8 @@ const server = createServer(async (req, res) => {
     else if (route === '/life/run') value = { queued: true };
     else if (route === '/life/stop') { fixture.settings.life.enabled = false; value = { stopped: true }; }
     else if (route === '/backup/status') value = { restartRequired: false, canActivate: false, maintenance: false, pendingRestore: false };
-    else if (route === '/backup/plugin' || route === '/backup/export') { res.writeHead(200, { 'content-type': 'application/octet-stream' }); res.end(Buffer.from('offline branding download fixture')); return; }
+    else if (route === '/backup/plugin' || route === '/backup/export') { res.writeHead(200, { 'content-type': 'application/octet-stream' }); res.end(backupBytes); return; }
+    else if (route === '/backup/preview') { assert.equal(binary, true); assert.deepEqual(raw, backupBytes); value = { token: 'offline-preview-token', preview: { formatVersion: 1, pluginVersion: manifest.version, dshVersion: '0.2.1-rc.3', createdAt: new Date().toISOString(), sessions: 0, memoryItems: memories.length, conversations: 1, files: 1, bytes: backupBytes.length, includesCredentials: false, warnings: [], canRestore: true, conflicts: [] } }; }
     else throw new Error(`Unexpected fixture request ${req.method} ${route}`);
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(value));
   } catch (error) { errors.push(error.message); res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: error.message })); }
@@ -144,13 +174,24 @@ try {
   await page.route('**/*', route => route.request().url().startsWith(origin) || route.request().url().startsWith('blob:') ? route.continue() : route.abort());
   const tab = async name => { await page.getByRole('tab', { name, exact: true }).click(); await page.getByRole('tabpanel').waitFor(); assert.equal(await page.getByLabel('当前管理空间').count(), 0, `${name} has no management-space selector`); };
   const capture = async name => { await page.screenshot({ path: path.join(output, name), fullPage: true }); };
-  const save = async () => { const count = saves.length; await Promise.all([page.waitForResponse(response => response.url().endsWith('/zeta/api/settings') && response.request().method() === 'PUT' && response.status() === 200), page.getByRole('button', { name: '保存设置', exact: true }).click()]); await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === '保存设置' && button.disabled)); check(saves.length === count + 1, 'settings save sends exactly one request'); };
-  await page.goto(origin); await page.getByRole('tab', { name: '管理员与群聊', exact: true }).waitFor();
+  const save = async () => { const count = saves.length; await Promise.all([page.waitForResponse(response => response.url().endsWith(`${apiPath}/settings`) && response.request().method() === 'PUT' && response.status() === 200), page.getByRole('button', { name: '保存设置', exact: true }).click()]); await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === '保存设置' && button.disabled)); check(saves.length === count + 1, 'settings save sends exactly one request'); };
+  await page.goto(`${origin}${mount}/`); await page.getByRole('tab', { name: '管理员与群聊', exact: true }).waitFor();
+  if (fnos) {
+    await page.getByText('已绑定', { exact: true }).waitFor();
+    check(await page.getByText('插件未启用，或当前版本不支持端内配置', { exact: true }).count() === 0, 'actual QQ binding component loads through the FNOS built-in plugins bridge');
+    const connectionForm = page.getByRole('form', { name: `${pluginName} QQ 接入配置`, exact: true });
+    await connectionForm.getByRole('switch', { name: '群聊仅回复 @机器人的消息', exact: true }).click();
+    await Promise.all([page.waitForResponse(response => response.url().endsWith(`${qqbot}/config`) && response.request().method() === 'POST'), connectionForm.getByRole('button', { name: '保存', exact: true }).click()]);
+    await page.getByText('离线QQ配置已保存', { exact: true }).waitFor();
+    check(qqConfig.requireMention === false && JSON.stringify(qqRequests.find(item => item.method === 'POST')?.body) === JSON.stringify({ requireMention: false }), 'actual QQ configuration saves its minimal JSON change beneath the app mount');
+    const oldStatuses = await page.evaluate(async () => await Promise.all(['/qqbot/im-qqbot/config', '/zeta/api/state'].map(async url => (await fetch(url)).status)));
+    check(oldStatuses.every(status => status === 404), 'the pinned FNOS bridge reproduces 404 for both old unregistered root namespaces');
+  }
   check(await page.getByRole('heading', { level: 2, name: pluginName, exact: true }).count() === 1, 'visible settings heading uses the renamed plugin brand');
   check(await page.getByRole('region', { name: `${pluginName}设置`, exact: true }).count() === 1 && await page.getByRole('tablist', { name: `${pluginName}功能`, exact: true }).count() === 1, 'settings surface and tab navigation expose the new accessible brand');
   check(await page.getByText(`${pluginName} ${fixture.version}`, { exact: true }).count() === 1, 'settings footer shows the new brand and current package version');
   for (const language of ['zh', 'en']) { const locale = JSON.parse(await readFile(path.join(root, 'locale', `${language}.json`), 'utf8')); check(locale.meta.title === pluginName && locale.meta.description.includes(pluginName), `${language} plugin card metadata uses the new brand`); }
-  check(await page.getByRole('tab').count() === 10, 'ten settings tabs are mounted from real source');
+  check(await page.getByRole('tablist', { name: `${pluginName}功能`, exact: true }).getByRole('tab').count() === 10, 'ten settings tabs are mounted from real source');
   check(await page.getByText('公共记忆', { exact: true }).count() === 1 && await page.getByText('2 条', { exact: true }).count() === 1, 'overview reads the public memoryCount without any spaces summary');
   await tab('记忆'); await page.getByText('私聊里约好的绘画', { exact: true }).waitFor(); await page.getByText('群聊里发现的新兴趣', { exact: true }).waitFor();
   check(await page.getByRole('article').count() === 2, 'one public memory list displays records from both private and group conversations');
@@ -232,7 +273,7 @@ try {
   await page.getByRole('button', { name: '刷新', exact: true }).click(); await page.getByText('状态已刷新，未保存的修改会保留。', { exact: true }).waitFor();
   check(await page.getByLabel('名字', { exact: true }).inputValue() === '用户尚未保存的名字', 'ordinary refresh preserves a manually edited identity draft');
   await page.getByText('AI 已更新自己的身份。请刷新当前身份后再保存，其他功能的草稿会保留。', { exact: true }).waitFor();
-  const conflictingSave = page.waitForResponse(response => response.url().endsWith('/zeta/api/settings') && response.status() === 409);
+  const conflictingSave = page.waitForResponse(response => response.url().endsWith(`${apiPath}/settings`) && response.status() === 409);
   await page.getByRole('button', { name: '保存设置', exact: true }).click(); await conflictingSave;
   await page.getByRole('alert').filter({ hasText: '身份已有新调整，请刷新当前身份后重试。' }).waitFor();
   check(fixture.settings.name === '小蓝鲸' && records.filter(item => item.path === '/settings').at(-1).identityRevision === String(oldRevision), 'stale draft retains its original revision and cannot overwrite an AI identity update');
@@ -267,22 +308,39 @@ try {
   check(await page.getByLabel('添加管理员').locator('option[value="owner-b"]').count() === 1, 'refresh discovers eligible users again after the directory is repopulated');
   await capture('desktop-security.png');
   await tab('备份迁移'); const pluginDownload = page.waitForEvent('download'); await page.getByRole('button', { name: '下载本版本插件', exact: true }).click();
-  check((await pluginDownload).suggestedFilename() === `${pluginName}-plugin.tgz`, 'plugin package download uses the renamed brand prefix');
+  const pluginFile = await pluginDownload;
+  check(pluginFile.suggestedFilename() === `${pluginName}-plugin.tgz`, 'plugin package download uses the renamed brand prefix');
+  if (fnos) check((await readFile(await pluginFile.path())).equals(backupBytes), 'plugin binary download crosses the FNOS bridge without byte changes');
   await page.getByLabel('设置备份密码').fill('offline-brand-check-only'); await page.getByLabel('再次输入备份密码').fill('offline-brand-check-only');
-  const backupDownload = page.waitForEvent('download'); await page.getByRole('button', { name: '导出加密备份', exact: true }).click(); const backupFileName = (await backupDownload).suggestedFilename();
+  const backupDownload = page.waitForEvent('download'); await page.getByRole('button', { name: '导出加密备份', exact: true }).click(); const backupFile = await backupDownload, backupFileName = backupFile.suggestedFilename();
   check(backupFileName.startsWith(`${pluginName}-`) && backupFileName.endsWith('.zeta-backup'), 'encrypted backup download uses the new prefix and preserved format extension');
   await page.getByText('加密备份已生成并开始下载，请保存好备份文件和密码。', { exact: true }).waitFor();
   check(await page.getByLabel('设置备份密码').inputValue() === '' && await page.getByLabel('再次输入备份密码').inputValue() === '', 'branding download fixture leaves backup password fields empty'); await capture('desktop-backup-brand.png');
+  if (fnos) {
+    check((await readFile(await backupFile.path())).equals(backupBytes), 'encrypted backup binary download crosses the FNOS bridge without byte changes');
+    await page.getByLabel(/^备份文件/).setInputFiles({ name: 'offline-fnos.zeta-backup', mimeType: 'application/octet-stream', buffer: backupBytes });
+    await page.getByLabel('备份的恢复密码', { exact: true }).fill('offline-fnos-backup-password');
+    await page.getByRole('button', { name: '校验并查看摘要', exact: true }).click(); await page.getByText('备份已校验，请核对下方摘要后再决定是否恢复。', { exact: true }).waitFor();
+    const preview = records.find(item => item.path === '/backup/preview');
+    check(preview?.binaryBytes === backupBytes.length && preview.passwordHeaderValid === true && preview.binaryDigest === createHash('sha256').update(backupBytes).digest('hex'), 'backup binary upload and its password header reach the mounted owner API unchanged');
+    check(!records.some(item => item.path === '/backup/restore'), 'preview regression does not execute restore');
+    await capture('desktop-fnos-backup-preview.png');
+  }
   await page.setViewportSize({ width: 390, height: 844 });
   for (const name of ['概览', '记忆', '语音', '会话', '管理员与群聊', '外部服务', '人设', '自主生活', '表情', '备份迁移']) { await tab(name); await page.waitForTimeout(80); const layout = await page.evaluate(() => ({ width: innerWidth, body: document.documentElement.scrollWidth })); overflows.push({ tab: name, ...layout }); check(layout.body <= layout.width, `390px ${name} has no horizontal page overflow`); await capture(`mobile-${name}.png`); }
   check(records.every(item => !new URLSearchParams(item.query).has('space') && !Object.hasOwn(item.body ?? {}, 'space')), 'every management API request omits obsolete space query and body parameters');
+  if (fnos) {
+    check(records.every(item => item.wirePath.startsWith(`${mount}${apiPath}/`)) && qqRequests.every(item => item.wirePath.startsWith(`${mount}${qqbot}/`)), 'all actual panel requests use plugins namespace and receive the FNOS mount prefix');
+    check(JSON.stringify(unmapped.map(item => item.path).sort()) === JSON.stringify(['/qqbot/im-qqbot/config', '/zeta/api/state'].sort()), 'only deliberate legacy probes hit the NAS root; no current panel request leaks there');
+    check(records.some(item => item.path === '/images/media') && records.some(item => item.path === '/persona/image') && ['meme', 'speech'].every(kind => records.some(item => item.path === '/media' && new URLSearchParams(item.query).get('kind') === kind)), 'generated images, persona originals, memes and speech previews cross the same mounted gateway');
+  }
   check(await page.evaluate(() => JSON.stringify(localStorage) === '{}' && JSON.stringify(sessionStorage) === '{}'), 'credentials and claim links are not persisted in browser storage');
   check(errors.length === 0, 'zero browser or fixture exceptions');
-  await writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: true, checks, requests: records, overflows, browser: browserPath || 'bundled chromium', fixture: 'offline owner API; no paid services/accounts' }, null, 2));
+  await writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: true, checks, requests: records, qqRequests, unmapped, overflows, browser: browserPath || 'bundled chromium', fixture: 'offline owner API; no paid services/accounts', ...(fnos ? { fnos: { mount, bridgeCommit, bridgeHash, customPaths: [] } } : {}) }, null, 2));
   await Promise.all(['failure.png', 'failure.txt'].map(name => unlink(path.join(output, name)).catch(() => {})));
   console.log(JSON.stringify({ ok: true, checks: checks.length, requests: records.length, output }));
 } catch (error) {
   const pages = browser.contexts().flatMap(context => context.pages());
   if (pages[0]) { await pages[0].screenshot({ path: path.join(output, 'failure.png'), fullPage: true }); await writeFile(path.join(output, 'failure.txt'), (await pages[0].locator('body').innerText()).slice(0, 50000)); }
   await writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: false, error: error.message, errors, checks, requests: records, overflows }, null, 2)); throw error;
-} finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
+} finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }

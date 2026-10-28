@@ -7,7 +7,8 @@ import type { ZetaRuntime } from './runtime.ts';
 import type { MemeModule } from './memes.ts';
 import { generateSpeech, listSpeechFiles } from './speech.ts';
 import type { ZetaState } from './state.ts';
-import { ownerRoutes } from '../shared/host-routes.ts';
+import { compatibleRoutePaths, ownerRoutes } from '../shared/host-routes.ts';
+import { ZETA_API_PATH, LEGACY_ZETA_API_PATH } from '../shared/http-paths.ts';
 import type { BackupService } from './backup.ts';
 import { PLUGIN_VERSION } from '../shared/utils.ts';
 import type { ZetaServices } from './services.ts';
@@ -45,16 +46,22 @@ function safeError(error: unknown): string {
 
 /** Runs inside the authenticated DSH HTTP service; never starts a parallel server. */
 export function registerZetaApi(ctx: Context, runtime: ZetaRuntime, state: ZetaState, memes: MemeModule, life: LifeControl, backup?: BackupService, services?: ZetaServices): void {
-  const server = ctx.get('webServer') as RouteHost | undefined;
-  if (!server) return;
-  const stop = ownerRoutes(ctx, server).register({ kind: 'prefix', path: '/zeta/api', handler: async (req, res) => {
+  ctx.inject(['webServer', 'connection'], scoped => registerZetaApiRoutes(scoped, runtime, state, memes, life, backup, services));
+}
+
+function registerZetaApiRoutes(ctx: Context, runtime: ZetaRuntime, state: ZetaState, memes: MemeModule, life: LifeControl, backup?: BackupService, services?: ZetaServices): void {
+  const server = ctx.get('webServer') as RouteHost;
+  const prefixes = compatibleRoutePaths(ZETA_API_PATH, ZETA_API_PATH, LEGACY_ZETA_API_PATH);
+  const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const abort = new AbortController();
     let finish = () => {};
     req.once('aborted', () => abort.abort());
     res.once('close', () => { if (!res.writableEnded) abort.abort(); });
     try {
       const url = new URL(req.url || '/', 'http://zeta.local');
-      const path = url.pathname.slice('/zeta/api'.length);
+      const prefix = prefixes.find(value => url.pathname === value || url.pathname.startsWith(`${value}/`));
+      if (!prefix) { json(res, 404, { error: '操作不存在' }); return; }
+      const path = url.pathname.slice(prefix.length);
       const method = req.method || 'GET';
       if (path.startsWith('/backup/')) {
         if (!backup) { json(res, 503, { error: '备份服务暂不可用' }); return; }
@@ -203,6 +210,8 @@ export function registerZetaApi(ctx: Context, runtime: ZetaRuntime, state: ZetaS
       json(res, 404, { error: '操作不存在' });
     } catch (error) { if (!res.headersSent) json(res, 400, { error: safeError(error) }); else res.end(); }
     finally { finish(); }
-  } });
-  ctx.effect(() => stop, 'zeta.management-api');
+  };
+  const stops: Array<() => void> = [];
+  ctx.effect(() => () => { for (const stop of stops.reverse()) stop(); }, 'zeta.management-api');
+  for (const path of prefixes) stops.push(ownerRoutes(ctx, server).register({ kind: 'prefix', path, handler }));
 }

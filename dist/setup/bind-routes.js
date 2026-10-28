@@ -1,6 +1,8 @@
 import { persistCredentialsToProfile, removeCredentialsFromProfile, updateProfileConfig, } from "./persist.js";
 import { getProfileDir } from "../shared/index.js";
 import { AccessControlSchema } from "../config.js";
+import { compatibleRoutePaths } from "../shared/host-routes.js";
+import { QQBOT_API_PATH, LEGACY_QQBOT_API_PATH } from "../shared/http-paths.js";
 import { BIND_CONFIG_PATH, BIND_MANUAL_PATH, BIND_REFRESH_PATH, BIND_STATE_PATH, BIND_UNBIND_PATH, } from "../shared/bind-protocol.js";
 // 协议单一来源：shared/bind-protocol.ts（类型 + 路径常量，客户端共用）
 export { BIND_CONFIG_PATH, BIND_MANUAL_PATH, BIND_REFRESH_PATH, BIND_STATE_PATH, BIND_UNBIND_PATH };
@@ -61,33 +63,45 @@ export function registerBindRoutes(webServer, service, logger, options = {}) {
         return persisted ? { persisted: true } : { persisted: false, error: '无法定位 profile 目录或写入失败，请改用环境变量配置' };
     };
     const handleManualSubmit = options.onManualCredentials ?? defaultManual;
-    const disposers = [
-        webServer.register({
+    const routes = [
+        {
             kind: 'exact',
             path: BIND_STATE_PATH,
             handler: (req, res) => { handleState(req, res, service, options); },
-        }),
-        webServer.register({
+        },
+        {
             kind: 'exact',
             path: BIND_REFRESH_PATH,
             handler: (req, res) => { handleRefresh(req, res, service); },
-        }),
-        webServer.register({
+        },
+        {
             kind: 'exact',
             path: BIND_MANUAL_PATH,
             handler: (req, res) => handleManual(req, res, handleManualSubmit),
-        }),
-        webServer.register({
+        },
+        {
             kind: 'exact',
             path: BIND_UNBIND_PATH,
             handler: (req, res) => handleUnbind(req, res, options),
-        }),
-        webServer.register({
+        },
+        {
             kind: 'exact',
             path: BIND_CONFIG_PATH,
             handler: (req, res) => handleConfig(req, res, options),
-        }),
+        },
     ];
+    const disposers = [];
+    try {
+        for (const route of routes)
+            for (const path of compatibleRoutePaths(route.path, QQBOT_API_PATH, LEGACY_QQBOT_API_PATH)) {
+                disposers.push(webServer.register({ ...route, path }));
+            }
+    }
+    catch (error) {
+        for (const dispose of disposers.reverse())
+            dispose();
+        throw error;
+    }
     logger.info(`im-qqbot: 端内绑定页已就绪: ${BIND_STATE_PATH}`);
     return () => { for (const dispose of disposers)
         dispose(); };

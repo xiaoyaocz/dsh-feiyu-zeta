@@ -86,6 +86,16 @@ dsh-feiyu-zeta 的 `src/zeta/state.ts` 与记忆工具按 QQ 会话隔离、上�
 - 使用方式：调用宿主公开的 Cordis 插件、Agent、会话、工具、原生存储域、凭据与 Schedule 服务；没有为本插件另建一套模型循环。
 - 宿主及 npm 依赖的版权与许可保持其各自分发声明；本项目的更名不改变这些归属。
 
+## FNOSP / fnos-dsh：开发测试引用
+
+- 上游：[FNOSP/fnos-dsh](https://github.com/FNOSP/fnos-dsh)。
+- 固定提交：`5e6c64bd0137f2b658441bbb86eba8b8c42f8402`。
+- 许可证：[Apache License 2.0](https://github.com/FNOSP/fnos-dsh/blob/5e6c64bd0137f2b658441bbb86eba8b8c42f8402/LICENSE)。
+- 引用范围：[浏览器网关桥接源码](https://github.com/FNOSP/fnos-dsh/blob/5e6c64bd0137f2b658441bbb86eba8b8c42f8402/packages/fnos-gateway/src/client/bridge.ts)，作为 `scripts/fixtures/fnos-gateway/bridge.js` 中的固定快照，用于离线验证应用子路径下的请求改写及插件面板访问。
+- 上游许可证原文保留在 `scripts/fixtures/fnos-gateway/LICENSE`，来源与校验说明保留在 `scripts/fixtures/fnos-gateway/SOURCE.md`。
+
+该快照仅用于开发回归测试，不由插件运行时加载，也不进入插件运行文件的分发列表；本项目没有将 FNOS 网关或系统 SDK 作为运行模块集成。源码模拟验证不等于已在真实 fnOS NAS 上完成测试。
+
 ## 大肥鱼／鲸鱼娘社区：人设写作参考
 
 - [ERUIHNIYHBKBNF / dafeiyu-persona](https://github.com/ERUIHNIYHBKBNF/dafeiyu-persona)：公开人设文本与说话风格参考。该仓库标注 MIT；本项目没有直接加载其 skill 或照搬其整段人设与台词。

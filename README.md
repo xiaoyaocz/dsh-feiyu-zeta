@@ -4,7 +4,7 @@
 
 dsh-feiyu-zeta 将 QQ 接入、人设与形象图、长期记忆、共享表情、语音、自主活动、云浏览器、临时网页和生图集成在一个 DSH 插件中。对话模型、会话、工具执行、凭据及自动任务沿用 DeepSeek Harness。
 
-当前版本 **0.4.4**，仅适配 **DSH 0.2.1-rc.3**，Node.js 要求 **>=24.9.0**。插件原名 `dsh-zeta`；代码与数据独立于旧 ProjectZeta 主工程，不会读取旧主工程数据库。0.3.0 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 数据及加密备份有升级兼容处理；实际安装、迁移验证范围见 [VALIDATION.md](./VALIDATION.md)。
+当前版本 **0.4.5**，仅适配 **DSH 0.2.1-rc.3**，Node.js 要求 **>=24.9.0**。插件原名 `dsh-zeta`；代码与数据独立于旧 ProjectZeta 主工程，不会读取旧主工程数据库。0.3.0 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 数据及加密备份有升级兼容处理；实际安装、迁移验证范围见 [VALIDATION.md](./VALIDATION.md)。
 
 ## 安装与升级
 
@@ -26,6 +26,19 @@ dsh plugin --profile web add github:xiaoyaocz/dsh-feiyu-zeta
 默认安装仓库的默认分支；也可在来源末尾添加 `#main`。要固定到某次构建，使用 `github:xiaoyaocz/dsh-feiyu-zeta#<完整40位提交SHA>`，将占位符替换为真实提交，不要原样输入。
 
 `main` 已包含完整预构建的 `dist/` 和 `lib/`，安装时直接加载，不依赖 `prepare`、`install` 或 `postinstall` 编译。安装环境仍需 **Git**，并能联网下载 GitHub 内容和运行依赖；仓库不包含 `node_modules`。本项目未发布到 npm，也未提供插件市场条目或 GitHub Release。首次使用需配置模型并绑定 QQ；已有绑定或环境变量时沿用原连接配置。收费功能默认关闭，需分别启用所需服务。
+
+### fnOS 安装与旧版 404 排查
+
+通过 [FNOSP/fnos-dsh](https://github.com/FNOSP/fnos-dsh) 的 NAS 应用使用 DSH 时，同样从上面的 GitHub 来源安装。**0.4.5 起**，绑定、设置与陪伴功能的 HTTP 接口统一位于 `/plugins/dsh-feiyu-zeta/` 下；FNOS 网关默认会为 `/plugins` 请求补上应用前缀，新版无需额外添加旧接口的两项代理规则。
+
+仍使用 **0.4.4**，且绑定区显示“插件未启用，或当前版本不支持端内配置”、配置或陪伴管理请求返回 **404** 时，可在 DSH 的 **插件 → fnOS 详情页 → 底部“三方插件 proxy”** 中保留已有规则，再追加两行：
+
+```text
+/qqbot/im-qqbot
+/zeta/api
+```
+
+保存后刷新 DSH 页面。此方式用于旧版的绝对路径接口；不要覆盖其他插件的规则。地址改写行为与配置入口依据 FNOS 的[固定版本网关源码](https://github.com/FNOSP/fnos-dsh/blob/5e6c64bd0137f2b658441bbb86eba8b8c42f8402/packages/fnos-gateway/src/client/bridge.ts#L26-L53)及[插件配置文档](https://github.com/FNOSP/fnos-dsh/blob/5e6c64bd0137f2b658441bbb86eba8b8c42f8402/docs/plugins/dsh-fnos.md#L44-L51)。本项目尚未完成 fnOS NAS 真机验证，实际检查范围见 [VALIDATION.md](./VALIDATION.md)。
 
 ### Windows 桌面版安装助手
 
@@ -54,18 +67,18 @@ npm run check:distribution
 npm pack
 ```
 
-打包得到 `dsh-feiyu-zeta-0.4.4.tgz`。安装助手仍支持本地包：
+打包得到 `dsh-feiyu-zeta-0.4.5.tgz`。安装助手仍支持本地包：
 
 ```powershell
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz -WhatIf
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz -Profile desktop
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.5.tgz -WhatIf
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.5.tgz
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.5.tgz -Profile desktop
 ```
 
 其他平台已有 DSH CLI 时，可使用本仓库的本地归档安装脚本，默认安装到 `web` profile：
 
 ```sh
-./install.sh --package ./dsh-feiyu-zeta-0.4.4.tgz
+./install.sh --package ./dsh-feiyu-zeta-0.4.5.tgz
 ```
 
 可用参数见 `./install.sh --help`；脚本使用已有 DSH，不代为从 npm 安装宿主。开发时保留 `npm run build`；源码变更应连同重新生成的 `dist/`、`lib/` 一起提交。CI 会从干净目录重建并检查已提交产物与源码一致，也会核对 Git 和 npm 归档中的完整运行文件。
@@ -219,13 +232,13 @@ npm run check:distribution
 测试覆盖协议模拟、工具权限、身份演变与版本冲突、群沉默与合并、计划恢复、图库迁移及备份等。模拟测试不会证明真实收费服务可用；真实端到端验证应使用自己的账户、短任务，并核对外部回执。真实宿主验证脚本使用桌面版自带 DSH、独立临时 home 和本地假模型，检查原生工具调用、普通 QQ 与自主活动的身份修改、权限边界及重启持久化；不会读取日常 profile：
 
 ```powershell
-node scripts/verify-host.mjs --package .\dsh-feiyu-zeta-0.4.4.tgz
+node scripts/verify-host.mjs --package .\dsh-feiyu-zeta-0.4.5.tgz
 ```
 
 双机迁移脚本另建两个独立临时 DSH home，检查身份、审计记录与原生会话等内容的加密备份及恢复：
 
 ```powershell
-node scripts/verify-backup-host.mjs --package .\dsh-feiyu-zeta-0.4.4.tgz
+node scripts/verify-backup-host.mjs --package .\dsh-feiyu-zeta-0.4.5.tgz
 ```
 
 ## 来源与使用范围

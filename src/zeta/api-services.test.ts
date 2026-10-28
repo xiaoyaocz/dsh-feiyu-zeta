@@ -12,18 +12,20 @@ import { PersonaService } from './persona.ts';
 import { registerZetaApi } from './api.ts';
 import type { ZetaServices } from './services.ts';
 import { SPEECH_ENDPOINTS } from './speech.ts';
+import { LEGACY_ZETA_API_PATH, ZETA_API_PATH } from '../shared/http-paths.ts';
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'zeta-api-services-'));
   cleanup.push(async () => { const rel = relative(tmpdir(), root); if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('Unsafe fixture cleanup'); await rm(root, { recursive: true, force: true }); });
-  let route!: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+  const routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>();
   const credentials = new Map<string, string>();
   const ctx = Object.assign(testDomainContext(), {
     connection: { admit: (req: IncomingMessage) => req.headers['x-owner'] === 'yes' ? { peer: { principal: { kind: 'owner' } } } : req.headers['x-owner'] === 'no' ? { peer: { principal: { kind: 'remote' } } } : { rejection: 401 } },
-    get: () => ({ register: (value: { handler: typeof route }) => { route = value.handler; return () => {}; } }),
-    effect: () => {}, credentials: { set: async (ref: unknown, value: string) => { credentials.set(JSON.stringify(ref), value); }, unset: async (ref: unknown) => { credentials.delete(JSON.stringify(ref)); }, describe: async (ref: unknown) => ({ configured: credentials.has(JSON.stringify(ref)) }) },
+    get: () => ({ register: (value: { path: string; handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }) => { routes.set(value.path, value.handler); return () => { routes.delete(value.path); }; } }),
+    inject: (_dependencies: readonly string[], callback: (scoped: Context) => void) => { callback(ctx); },
+    effect: (execute: () => () => void) => { const stop = execute(); cleanup.push(async () => { stop(); }); }, credentials: { set: async (ref: unknown, value: string) => { credentials.set(JSON.stringify(ref), value); }, unset: async (ref: unknown) => { credentials.delete(JSON.stringify(ref)); }, describe: async (ref: unknown) => ({ configured: credentials.has(JSON.stringify(ref)) }) },
   }) as unknown as Context;
   const state = await ZetaState.open(ctx); cleanup.push(() => state.close());
   const runtime = new ZetaRuntime(ctx, state, 'bot', root);
@@ -38,14 +40,28 @@ async function fixture() {
   const services = { persona, browser, images, deployments } as unknown as ZetaServices;
   const memes = { list: vi.fn(async (agent: unknown) => ({ items: [], actor: runtime.spaceFor(agent) })) };
   registerZetaApi(ctx, runtime, state, memes as never, { reconcile: async () => {}, runNow: async () => {}, stop: async () => {}, status: () => ({ status: 'disabled' }) }, undefined, services);
-  const server = createServer((req, res) => { void route(req, res); }); await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+  const server = createServer((req, res) => {
+    const path = new URL(req.url || '/', 'http://fixture.local').pathname;
+    const route = [...routes].find(([prefix]) => path === prefix || path.startsWith(`${prefix}/`))?.[1];
+    if (route) void route(req, res); else { res.writeHead(404); res.end(); }
+  }); await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
   cleanup.push(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); });
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/zeta/api`;
-  const call = (path: string, method = 'GET', body?: unknown, owner = 'yes', extraHeaders: Record<string, string> = {}) => fetch(`${base}${path}`, { method, headers: { 'x-owner': owner, 'content-type': 'application/json', ...extraHeaders }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const call = (path: string, method = 'GET', body?: unknown, owner = 'yes', extraHeaders: Record<string, string> = {}, apiPrefix = ZETA_API_PATH) => fetch(`${base}${apiPrefix}${path}`, { method, headers: { 'x-owner': owner, 'content-type': 'application/json', ...extraHeaders }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   return { call, runtime, state, services, browser, images, deployments, credentials, image, memes };
 }
 
 describe('external-service management routes', () => {
+  it.each([ZETA_API_PATH, LEGACY_ZETA_API_PATH])('serves the same identity and enforces owner and origin policy at %s', async apiPrefix => {
+    const { call, state } = await fixture();
+    expect(await (await call('/identity', 'GET', undefined, 'yes', {}, apiPrefix)).json()).toEqual(state.identity);
+    expect((await call('/identity', 'GET', undefined, '', {}, apiPrefix)).status).toBe(401);
+    expect((await call('/identity', 'GET', undefined, 'no', {}, apiPrefix)).status).toBe(403);
+    const before = state.identity;
+    expect((await call('/identity/reset', 'POST', { expected_revision: before.revision }, 'yes', { origin: 'https://evil.example' }, apiPrefix)).status).toBe(400);
+    expect(state.identity).toEqual(before);
+  });
+
   it('returns current-bot observed QQ users plus saved-only administrators without inventing an origin', async () => {
     const { call, state } = await fixture();
     await state.observeUser({ appId: 'bot', senderId: 'group-member', name: '群友甲', scope: 'group', peerId: 'group-a', seenAt: 100 });

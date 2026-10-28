@@ -20,6 +20,8 @@ import {
 } from './persist.ts';
 import { getProfileDir } from '../shared/index.ts';
 import { AccessControlSchema } from '../config.ts';
+import { compatibleRoutePaths } from '../shared/host-routes.ts';
+import { QQBOT_API_PATH, LEGACY_QQBOT_API_PATH } from '../shared/http-paths.ts';
 import {
   BIND_CONFIG_PATH,
   BIND_MANUAL_PATH,
@@ -153,33 +155,39 @@ export function registerBindRoutes(
   };
   const handleManualSubmit = options.onManualCredentials ?? defaultManual;
 
-  const disposers = [
-    webServer.register({
+  const routes: WebRoute[] = [
+    {
       kind: 'exact',
       path: BIND_STATE_PATH,
       handler: (req, res) => { handleState(req, res, service, options); },
-    }),
-    webServer.register({
+    },
+    {
       kind: 'exact',
       path: BIND_REFRESH_PATH,
       handler: (req, res) => { handleRefresh(req, res, service); },
-    }),
-    webServer.register({
+    },
+    {
       kind: 'exact',
       path: BIND_MANUAL_PATH,
       handler: (req, res) => handleManual(req, res, handleManualSubmit),
-    }),
-    webServer.register({
+    },
+    {
       kind: 'exact',
       path: BIND_UNBIND_PATH,
       handler: (req, res) => handleUnbind(req, res, options),
-    }),
-    webServer.register({
+    },
+    {
       kind: 'exact',
       path: BIND_CONFIG_PATH,
       handler: (req, res) => handleConfig(req, res, options),
-    }),
+    },
   ];
+  const disposers: Array<() => void> = [];
+  try {
+    for (const route of routes) for (const path of compatibleRoutePaths(route.path, QQBOT_API_PATH, LEGACY_QQBOT_API_PATH)) {
+      disposers.push(webServer.register({ ...route, path }));
+    }
+  } catch (error) { for (const dispose of disposers.reverse()) dispose(); throw error; }
   logger.info(`im-qqbot: 端内绑定页已就绪: ${BIND_STATE_PATH}`);
   return () => { for (const dispose of disposers) dispose(); };
 }

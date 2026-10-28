@@ -1,6 +1,6 @@
 // Test-only Cordis plugin. Loaded only by verify-host.mjs, never by the shipped bundle.
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
@@ -20,6 +20,7 @@ export async function apply(ctx, config) {
   let task;
   let manager;
   let cookie;
+  let apiPath = '/zeta/api';
   const fakeDeliveries = [];
   const fixtureTarget = 'group:fixture-group';
   const administrator = 'zeta-fixture-administrator';
@@ -86,7 +87,7 @@ export async function apply(ctx, config) {
     execute: async (args, exec) => { exec.signal.throwIfAborted(); echoCalls++; return { text: args.text }; },
   });
   async function request(path, method = 'GET', body, headers = {}, expectedStatus = 200) {
-    const response = await fetch(`http://127.0.0.1:${config.port}/zeta/api${path}`, { method, headers: { cookie, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(15000) });
+    const response = await fetch(`http://127.0.0.1:${config.port}${apiPath}${path}`, { method, headers: { cookie, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(15000) });
     const data = await response.json();
     assert.equal(response.status, expectedStatus, JSON.stringify(data));
     if (data.warning) throw new Error(data.warning);
@@ -145,16 +146,25 @@ export async function apply(ctx, config) {
       const { ConfigSchema } = await import(pathToFileURL(join(config.pluginRoot, 'dist/config.js')).href);
       manager = new SessionManager(ctx, ctx.agents, ConfigSchema({ appId: 'zeta-fixture', appSecret: 'unused-local-fixture', cwd: config.workspace }), { info() {}, warn() {}, error() {}, debug() {} });
       const origin = `http://127.0.0.1:${config.port}`;
+      const pathModule = join(config.pluginRoot, 'dist/shared/http-paths.js');
+      let hasNamespacedRoutes = false;
+      try { await access(pathModule); hasNamespacedRoutes = true; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (hasNamespacedRoutes) apiPath = (await import(pathToFileURL(pathModule).href)).ZETA_API_PATH;
       assertCheck(JSON.parse(await readFile(join(config.pluginRoot, 'package.json'), 'utf8')).version === config.expectedVersion, 'Real Host loads exactly the requested newly built package version');
-      for (const [path, method] of [['/state', 'GET'], ['/settings', 'PUT']]) {
-        const unauthenticated = await fetch(`${origin}/zeta/api${path}`, { method, ...(method === 'PUT' ? { headers: { 'content-type': 'application/json' }, body: '{}' } : {}), signal: AbortSignal.timeout(15000) });
-        assertCheck(unauthenticated.status === 401 || unauthenticated.status === 403, `Unauthenticated ${method} management request is rejected`);
+      for (const prefix of new Set([apiPath, '/zeta/api'])) for (const [path, method] of [['/state', 'GET'], ['/settings', 'PUT']]) {
+        const unauthenticated = await fetch(`${origin}${prefix}${path}`, { method, ...(method === 'PUT' ? { headers: { 'content-type': 'application/json' }, body: '{}' } : {}), signal: AbortSignal.timeout(15000) });
+        assertCheck(unauthenticated.status === 401 || unauthenticated.status === 403, `Unauthenticated ${method} management request is rejected at ${prefix}`);
       }
       const login = await fetch(ctx.connection.authenticatedUrl(`${origin}/`), { redirect: 'manual', signal: AbortSignal.timeout(15000) });
       assert.equal(login.status, 303, 'Native authenticated URL must exchange its token for a browser cookie');
       cookie = login.headers.getSetCookie().map(value => value.split(';', 1)[0]).join('; ');
       assert.ok(cookie, 'Native browser login must issue an authenticated cookie');
       assertCheck(typeof (await request('/state')).version === 'string', 'Native authenticated browser cookie admits owner management requests');
+      if (hasNamespacedRoutes) {
+        const legacy = await fetch(`${origin}/zeta/api/state`, { headers: { cookie }, signal: AbortSignal.timeout(15000) });
+        assertCheck(legacy.status === 200 && (await legacy.json()).version === config.expectedVersion, 'Legacy API alias remains available alongside the namespaced API on the native Host');
+      }
       if (runtime.beginRequest) {
         if (typeof runtime.state.observeUser === 'function' && config.phase !== 2) {
           await runtime.state.observeUser({ appId: 'zeta-fixture', senderId: administrator, name: 'Native fixture administrator', scope: 'c2c', peerId: administrator, seenAt: Date.now() - 1000 });
@@ -214,7 +224,7 @@ export async function apply(ctx, config) {
             const folder = join(runtime.dataDir, 'images', createHash('sha256').update(runtime.selfSpace).digest('hex').slice(0, 32));
             const record = JSON.parse(await readFile(join(folder, `${image.id}.json`), 'utf8'));
             assertCheck(record.send === false && record.owner === runtime.selfSpace, 'Migrated image records use the public library and cannot replay an old automatic QQ send');
-            const media = await fetch(`http://127.0.0.1:${config.port}/zeta/api/images/media?id=${image.id}`, { headers: { cookie }, signal: AbortSignal.timeout(15000) });
+            const media = await fetch(`http://127.0.0.1:${config.port}${apiPath}/images/media?id=${image.id}`, { headers: { cookie }, signal: AbortSignal.timeout(15000) });
             assertCheck(media.status === 200 && (await media.arrayBuffer()).byteLength === image.bytes, 'Migrated public image media remains accessible through the authenticated API');
           }
           assertCheck(!ctx.agents.get(old.groupSessionId), 'Legacy group Session remains cold while its directory binding migrates');

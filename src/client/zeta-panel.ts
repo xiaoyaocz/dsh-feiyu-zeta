@@ -1,4 +1,5 @@
 import { createElement as h, useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
+import { ZETA_API_PATH } from '../shared/http-paths.ts';
 
 type Provider = 'mimo' | 'minimax';
 interface ProviderSettings { model: string; voice: string; speed: number; emotion?: string }
@@ -37,7 +38,7 @@ interface BackupStatus { restartRequired: boolean; canActivate: boolean; mainten
 type Tab = 'overview' | 'persona' | 'conversations' | 'memory' | 'memes' | 'speech' | 'life' | 'security' | 'services' | 'backup';
 type Feedback = (message: string, error?: boolean) => void;
 
-const API = '/zeta/api';
+const API = ZETA_API_PATH;
 const PLUGIN_NAME = 'dsh-feiyu-zeta';
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'overview', label: '概览' }, { id: 'persona', label: '人设' }, { id: 'conversations', label: '会话' }, { id: 'memory', label: '记忆' },
