@@ -80,7 +80,7 @@ export class SettingsReader {
     if (this.settingsCache !== undefined) return this.settingsCache;
 
     try {
-      const settingsPath = resolve(homedir(), '.dsh', 'settings.yaml');
+      const settingsPath = resolve(process.env.DSH_HOME || resolve(homedir(), '.dsh'), 'settings.yaml');
       if (!existsSync(settingsPath)) {
         this.settingsCache = null;
         return null;

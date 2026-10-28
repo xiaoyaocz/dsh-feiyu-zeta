@@ -16,6 +16,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { Logger } from '../types.ts';
 import { BindingService } from './binding-service.ts';
 import { registerBindRoutes, type WebServerLike } from './bind-routes.ts';
+import { ownerRoutes } from '../shared/host-routes.ts';
 import { createBrowserPresenter, createTerminalPresenter, isDesktopHost } from './presenters.ts';
 import { persistCredentialsToProfile, type SetupCredentials } from './persist.ts';
 import { getProfileDir } from '../shared/index.ts';
@@ -85,10 +86,10 @@ export async function ensureCredentials(
   // 重跑（自动清理旧路由、注册新路由），与 webserver 的注入生命周期对齐。
   (ctx as unknown as {
     inject(deps: readonly string[], callback: (scoped: Context) => void): unknown;
-  }).inject(['webServer'], (scoped) => {
+  }).inject(['webServer', 'connection'], (scoped) => {
     const webServer = (scoped as unknown as { webServer?: unknown }).webServer as WebServerLike | undefined;
     if (webServer === undefined || typeof webServer.register !== 'function') return;
-    const disposeRoutes = registerBindRoutes(webServer, service, logger, {
+    const disposeRoutes = registerBindRoutes(ownerRoutes(scoped, webServer), service, logger, {
       // 未绑定流程中的手动提交：终止扫码轮询，走同一持久化路径
       onManualCredentials: (credentials) => {
         service.dispose();
@@ -114,10 +115,10 @@ export async function ensureCredentials(
 export function registerBoundCredentialRoutes(ctx: Context, logger: Logger, appId: string, config: Record<string, unknown>): void {
   (ctx as unknown as {
     inject(deps: readonly string[], callback: (scoped: Context) => void): unknown;
-  }).inject(['webServer'], (scoped) => {
+  }).inject(['webServer', 'connection'], (scoped) => {
     const webServer = (scoped as unknown as { webServer?: unknown }).webServer as WebServerLike | undefined;
     if (webServer === undefined || typeof webServer.register !== 'function') return;
-    const disposeRoutes = registerBindRoutes(webServer, null, logger, {
+    const disposeRoutes = registerBindRoutes(ownerRoutes(scoped, webServer), null, logger, {
       boundAppId: () => appId,
       onManualCredentials: (credentials) => persistCredentials(credentials, logger),
       currentConfig: () => config,

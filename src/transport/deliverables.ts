@@ -13,6 +13,7 @@ import { isPathAllowed, sendMediaFile, type MediaSenderLike } from '../media/sen
 import type { PresentedFileRef } from './events.ts';
 import { chunkMarkdownText } from './chunker.ts';
 import type { QQBotSender } from './outbound-buffer.ts';
+import type { ZetaRuntime } from '../zeta/runtime.ts';
 
 /** 交付物投递器（outbound 路由只依赖此接口，便于测试注入） */
 export interface DeliverablesDelivererLike {
@@ -30,6 +31,7 @@ export class DeliverablesDeliverer implements DeliverablesDelivererLike {
     mediaBot: MediaSenderLike,
     config: ImQQBotConfig,
     logger: Logger,
+    private readonly zeta?: ZetaRuntime,
   ) {
     this.sender = sender;
     this.mediaBot = mediaBot;
@@ -56,7 +58,11 @@ export class DeliverablesDeliverer implements DeliverablesDelivererLike {
         missed.push(`${display}（路径不在允许范围）`);
         continue;
       }
-      const result = await sendMediaFile(this.mediaBot, record.replyTarget, absPath);
+      const result = this.zeta
+        ? await this.zeta.sendFile(record.agent, absPath, undefined, new AbortController().signal)
+          .then(value => ({ outcome: 'sent' as const, size: Number(value.size) }))
+          .catch(() => ({ outcome: 'failed' as const, error: '未收到平台确认，或文件不在当前会话允许范围' }))
+        : await sendMediaFile(this.mediaBot, record.replyTarget, absPath);
       if (result.outcome === 'sent') {
         sent++;
         this.logger.info(

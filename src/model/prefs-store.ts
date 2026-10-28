@@ -33,7 +33,7 @@ export class PrefsStore {
   private readonly debugLog?: DebugFn;
 
   constructor(debugLog?: DebugFn) {
-    this.prefsPath = resolve(homedir(), '.dsh-qqbot', 'model-prefs.json');
+    this.prefsPath = resolve(process.env.DSH_HOME || resolve(homedir(), '.dsh'), 'zeta', 'qq-model-prefs.json');
     this.debugLog = debugLog;
     this.load();
   }

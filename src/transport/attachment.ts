@@ -10,14 +10,41 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import * as dns from 'node:dns';
+import { BlockList, isIP, type LookupFunction } from 'node:net';
+import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import type { Logger, RawAttachment } from '../types.ts';
 import type { MediaConfig } from '../config.ts';
 import { MEDIA_ROOT } from '../media/media-cleaner.ts';
 
-/** 默认富媒体下载大小上限（MB），可被 media.maxMB 覆盖 */
-const DEFAULT_MAX_MB = 200;
+/** A provider's reported size is not trusted; actual reads are always capped. */
+export const MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024;
 /** 下载超时（毫秒） */
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+const MAX_REDIRECTS = 3;
+
+export interface AttachmentTarget {
+  url: URL;
+  address: dns.LookupAddress;
+}
+
+export interface AttachmentResponse {
+  status: number;
+  headers: IncomingHttpHeaders;
+  body: AsyncIterable<Uint8Array>;
+  cancel(): void;
+}
+
+export interface AttachmentDownloadOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  redirects?: number;
+  /** Test seam. Production always resolves and pins the actual connection. */
+  lookup?: (hostname: string) => Promise<dns.LookupAddress[]>;
+  request?: (target: AttachmentTarget, signal: AbortSignal) => Promise<AttachmentResponse>;
+  /** Test destination; normal QQ transport continues to use MEDIA_ROOT. */
+  mediaRoot?: string;
+}
 
 /** 下载结果 */
 export interface DownloadedFile {
@@ -93,54 +120,142 @@ function formatSize(bytes: number): string {
   return `${bytes}B`;
 }
 
-// ── SSRF 防护：阻断解析到私有/保留地址的下载 ──
-
-const PRIVATE_RANGES: Array<[netmask: bigint, prefix: number]> = [
-  [0x0A000000n, 8], // 10.0.0.0/8
-  [0xAC100000n, 12], // 172.16.0.0/12
-  [0xC0A80000n, 16], // 192.168.0.0/16
-  [0x7F000000n, 8], // 127.0.0.0/8
-  [0xA9FE0000n, 16], // 169.254.0.0/16
-  [0xE0000000n, 4], // 224.0.0.0/4 (multicast)
-];
-
-function ipToBigInt(ip: string): bigint {
-  return ip.split('.').reduce((acc, octet) => (acc << 8n) | BigInt(Number(octet)), 0n);
+// ── Download policy: public sockets only, HTTP only for known QQ CDN domains. ──
+const QQ_CDN_SUFFIXES = ['qq.com', 'qq.com.cn', 'qpic.cn', 'gtimg.cn'];
+const blockedV4 = new BlockList();
+for (const [address, prefix] of [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+  ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
+  ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
+  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
+] as const) blockedV4.addSubnet(address, prefix);
+const globalV6 = new BlockList();
+globalV6.addSubnet('2000::', 3, 'ipv6');
+const blockedV6 = new BlockList();
+for (const [address, prefix] of [['2001::', 23], ['2001:db8::', 32], ['2002::', 16], ['3fff::', 20]] as const) {
+  blockedV6.addSubnet(address, prefix, 'ipv6');
 }
 
-function isPrivateIP(ip: string): boolean {
-  const val = ipToBigInt(ip);
-  return PRIVATE_RANGES.some(
-    ([mask, prefix]) => (val >> (32n - BigInt(prefix))) === (mask >> (32n - BigInt(prefix))),
-  );
+export function isQqCdnHostname(value: string): boolean {
+  const hostname = value.toLowerCase().replace(/\.$/, '');
+  return QQ_CDN_SUFFIXES.some((suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`));
 }
 
-/** 解析 hostname 并阻断指向私有/内网地址的 URL（SSRF 防护） */
-async function assertSafeHostname(hostname: string): Promise<void> {
-  const addresses = await dns.promises.resolve4(hostname).catch(() => []);
-  if (addresses.length === 0) throw new Error(`DNS resolution failed: ${hostname}`);
-  for (const addr of addresses) {
-    if (isPrivateIP(addr)) throw new Error(`SSRF blocked: ${hostname} resolves to private IP ${addr}`);
+/** Conservative public unicast policy, including mapped/private IPv6 rejection. */
+export function isPublicAttachmentAddress(address: string): boolean {
+  const family = isIP(address);
+  if (family === 4) return !blockedV4.check(address, 'ipv4');
+  if (family === 6) return globalV6.check(address, 'ipv6') && !blockedV6.check(address, 'ipv6');
+  return false;
+}
+
+function withAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new Error('Attachment download cancelled'));
+    if (signal.aborted) {
+      pending.catch(() => undefined);
+      abort();
+      return;
+    }
+    signal.addEventListener('abort', abort, { once: true });
+    pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+
+/** Each redirect performs a fresh lookup. The socket must use only this checked result. */
+export async function resolveAttachmentTarget(value: string, options: AttachmentDownloadOptions = {}): Promise<AttachmentTarget> {
+  const parsed = new URL(normalizeUrl(value));
+  if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:') || parsed.username || parsed.password) throw new Error('Attachment URL must be HTTP(S) without embedded credentials');
+  if (parsed.protocol === 'http:' && !isQqCdnHostname(parsed.hostname)) throw new Error('HTTP attachments are allowed only on known QQ CDN domains');
+  const host = parsed.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const signal = options.signal ?? AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+  signal.throwIfAborted();
+  const literalFamily = isIP(host);
+  const addresses = literalFamily
+    ? [{ address: host, family: literalFamily }]
+    : await withAbort((options.lookup ?? ((name) => dns.promises.lookup(name, { all: true, verbatim: true })))(host), signal);
+  if (!addresses.length || addresses.some((entry) => isIP(entry.address) !== entry.family || !isPublicAttachmentAddress(entry.address))) throw new Error('SSRF blocked: attachment destination is not a public address');
+  const address = addresses.find((entry) => entry.family === 4) ?? addresses[0]!;
+  return { url: parsed, address };
+}
+
+/** Native request avoids fetch's second DNS resolution and automatic redirects. */
+export function pinnedAttachmentLookup(address: dns.LookupAddress): LookupFunction {
+  return (_hostname, options, callback) => {
+    if (options.all) callback(null, [address]);
+    else callback(null, address.address, address.family);
+  };
+}
+
+export function requestPinnedAttachment(target: AttachmentTarget, signal: AbortSignal): Promise<AttachmentResponse> {
+  return new Promise((resolve, reject) => {
+    const request = (target.url.protocol === 'https:' ? httpsRequest : httpRequest)(target.url, {
+      method: 'GET', agent: false, signal, lookup: pinnedAttachmentLookup(target.address),
+      headers: { 'accept-encoding': 'identity', 'user-agent': 'dsh-feiyu-zeta/0.4.1' },
+    }, (response) => resolve({
+      status: response.statusCode ?? 500,
+      headers: response.headers,
+      body: response,
+      cancel: () => response.destroy(),
+    }));
+    request.once('error', reject);
+    request.end();
+  });
+}
+
+/** Bounded streaming read; never materialize an unbounded Response.arrayBuffer(). */
+export async function downloadAttachmentBytes(value: string, requestedMaxBytes = MAX_ATTACHMENT_BYTES, options: AttachmentDownloadOptions = {}): Promise<Buffer> {
+  if (!Number.isFinite(requestedMaxBytes) || requestedMaxBytes < 1) throw new Error('Attachment size limit is invalid');
+  const maxBytes = Math.min(MAX_ATTACHMENT_BYTES, Math.floor(requestedMaxBytes));
+  const timeout = options.timeoutMs ?? DOWNLOAD_TIMEOUT_MS;
+  const redirects = options.redirects ?? MAX_REDIRECTS;
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 300000 || !Number.isInteger(redirects) || redirects < 0 || redirects > 5) throw new Error('Attachment download options are invalid');
+  const signal = AbortSignal.any([AbortSignal.timeout(timeout), ...(options.signal ? [options.signal] : [])]);
+  let current = value;
+  for (let hop = 0; ; hop++) {
+    const target = await resolveAttachmentTarget(current, { ...options, signal });
+    const response = await withAbort((options.request ?? requestPinnedAttachment)(target, signal).then((response) => {
+      if (signal.aborted) { response.cancel(); signal.throwIfAborted(); }
+      return response;
+    }), signal);
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      response.cancel();
+      const location = response.headers.location;
+      if (!location || hop >= redirects) throw new Error('Attachment redirect limit exceeded or missing Location');
+      current = new URL(location, target.url).href;
+      continue;
+    }
+    try {
+      if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
+      const encoding = response.headers['content-encoding'];
+      if (encoding && encoding.toLowerCase() !== 'identity') throw new Error('Attachment content encoding is not supported');
+      const lengthHeader = response.headers['content-length'];
+      if (lengthHeader !== undefined) {
+        const length = Number(lengthHeader);
+        if (!Number.isSafeInteger(length) || length < 0 || length > maxBytes) throw new Error('Attachment Content-Length exceeds size limit or is invalid');
+      }
+      const chunks: Buffer[] = [];
+      const iterator = response.body[Symbol.asyncIterator]();
+      let length = 0;
+      for (;;) {
+        const step = await withAbort(iterator.next(), signal);
+        if (step.done) break;
+        if (!(step.value instanceof Uint8Array)) throw new Error('Invalid attachment response chunk');
+        length += step.value.byteLength;
+        if (length > maxBytes) throw new Error(`Download exceeds ${Math.floor(maxBytes / 1024 / 1024)}MB size limit`);
+        chunks.push(Buffer.from(step.value));
+      }
+      signal.throwIfAborted();
+      return Buffer.concat(chunks, length);
+    } finally { response.cancel(); }
   }
 }
 
-/** 安全下载：仅 HTTPS + SSRF 防护 + 大小上限 + 超时，返回下载字节数 */
-async function download(url: string, destPath: string, maxBytes: number): Promise<number> {
-  const parsed = new URL(normalizeUrl(url));
-  if (parsed.protocol !== 'https:') {
-    throw new Error(`Only HTTPS allowed: ${parsed.protocol}`);
-  }
-  await assertSafeHostname(parsed.hostname);
-
-  const resp = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-  const buf = Buffer.from(await resp.arrayBuffer());
-  if (buf.length > maxBytes) {
-    throw new Error(`Download exceeds ${Math.floor(maxBytes / 1024 / 1024)}MB`);
-  }
-  writeFileSync(destPath, buf);
-  return buf.length;
+async function download(url: string, destPath: string, maxBytes: number, options: AttachmentDownloadOptions): Promise<number> {
+  const bytes = await downloadAttachmentBytes(url, maxBytes, options);
+  options.signal?.throwIfAborted();
+  writeFileSync(destPath, bytes, { flag: 'wx' });
+  return bytes.length;
 }
 
 /**
@@ -153,6 +268,7 @@ export async function downloadMediaAttachments(
   attachments: RawAttachment[] | undefined,
   media: MediaConfig,
   logger: Logger,
+  options: AttachmentDownloadOptions = {},
 ): Promise<DownloadedFile[]> {
   if (!media.enabled) return [];
 
@@ -161,14 +277,17 @@ export async function downloadMediaAttachments(
   );
   if (targets.length === 0) return [];
 
-  mkdirSync(MEDIA_ROOT, { recursive: true });
+  const mediaRoot = options.mediaRoot ?? MEDIA_ROOT;
+  mkdirSync(mediaRoot, { recursive: true });
 
-  const maxBytes = (media.maxMB ?? DEFAULT_MAX_MB) * 1024 * 1024;
+  const requestedMaxMB = media.maxMB;
+  const maxBytes = Math.min(MAX_ATTACHMENT_BYTES, Number.isFinite(requestedMaxMB) && requestedMaxMB > 0 ? requestedMaxMB * 1024 * 1024 : MAX_ATTACHMENT_BYTES);
 
   const results: DownloadedFile[] = [];
   for (const att of targets) {
     const contentType = classifyContentType(att.content_type) as 'image' | 'video' | 'file';
-    const localPath = toPosixPath(join(MEDIA_ROOT, uniqueFilename(att.filename)));
+    options.signal?.throwIfAborted();
+    const localPath = toPosixPath(join(mediaRoot, uniqueFilename(att.filename)));
 
     if (att.size > maxBytes) {
       logger.debug(`im-qqbot: skip download (${att.size}B too large): ${att.filename}`);
@@ -177,8 +296,9 @@ export async function downloadMediaAttachments(
 
     let bytes: number;
     try {
-      bytes = await download(att.url, localPath, maxBytes);
+      bytes = await download(att.url, localPath, maxBytes, options);
     } catch (err) {
+      if (options.signal?.aborted) throw options.signal.reason;
       logger.warn(`im-qqbot: download failed: ${att.filename} — ${err instanceof Error ? err.message : String(err)}`);
       continue; // 下载失败不加入结果，由 buildDynamicCtx 回退为描述
     }

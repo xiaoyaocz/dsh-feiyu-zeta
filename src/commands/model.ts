@@ -4,7 +4,7 @@
 import type { CommandDeps, CategorizedCommand } from './types.ts';
 import { getScopePeer, sendMarkdownChunked } from '../shared/index.ts';
 
-export function modelCommand({ manager, config }: CommandDeps): CategorizedCommand {
+export function modelCommand({ manager, config, isAdministrator }: CommandDeps): CategorizedCommand {
   return {
     name: 'model',
     category: 'agent',
@@ -12,6 +12,7 @@ export function modelCommand({ manager, config }: CommandDeps): CategorizedComma
     handler: async (cmdCtx) => {
       const { scope, peerId } = getScopePeer(cmdCtx);
       const args = (cmdCtx.command?.raw ?? '').trim();
+      if (args && !isAdministrator?.(cmdCtx.message.senderId)) return '只有管理员可以修改模型配置。';
 
       // 无参数：显示当前模型 + 可用模型列表（可点击）
       if (!args) {

@@ -79,6 +79,7 @@ class OutboundRouter {
   private readonly logger: Logger;
   private readonly toolsRegistry: ToolsRegistryLike | undefined;
   private readonly deliverer: DeliverablesDelivererLike | undefined;
+  private readonly allowAutomatic: (record: SessionRecord) => boolean;
 
   public constructor(
     manager: SessionManager,
@@ -87,6 +88,7 @@ class OutboundRouter {
     logger: Logger,
     toolsRegistry: ToolsRegistryLike | undefined,
     deliverer?: DeliverablesDelivererLike,
+    allowAutomatic: (record: SessionRecord) => boolean = () => true,
   ) {
     this.manager = manager;
     this.bot = bot;
@@ -94,6 +96,7 @@ class OutboundRouter {
     this.logger = logger;
     this.toolsRegistry = toolsRegistry;
     this.deliverer = deliverer;
+    this.allowAutomatic = allowAutomatic;
   }
 
   /** 事件分发入口 */
@@ -103,6 +106,7 @@ class OutboundRouter {
 
     const record = this.manager.findBySessionId(session.header.id);
     if (record === undefined) return;
+    if (!this.allowAutomatic(record)) return;
 
     switch (event.type) {
       case 'assistant/chunk':
@@ -158,6 +162,7 @@ class OutboundRouter {
 
     const record = this.manager.findBySessionId(agentId);
     if (record === undefined) return;
+    if (!this.allowAutomatic(record)) return;
     this.appendChunk(agentId, record, delta.text);
   }
 
@@ -307,8 +312,9 @@ export function createOutboundHandler(
   logger: Logger,
   toolsRegistry?: ToolsRegistryLike,
   deliverer?: DeliverablesDelivererLike,
+  allowAutomatic?: (record: SessionRecord) => boolean,
 ): OutboundHandlers {
-  const router = new OutboundRouter(manager, bot, config, logger, toolsRegistry, deliverer);
+  const router = new OutboundRouter(manager, bot, config, logger, toolsRegistry, deliverer, allowAutomatic);
   return {
     routeSessionEvent: (session, event) => router.route(session, event),
     routeStreamFrame: (agentId, delta) => router.routeStreamFrame(agentId, delta),

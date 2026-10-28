@@ -10,6 +10,8 @@ import type { ImQQBotConfig } from '../config.ts';
 export interface CommandDeps {
   manager: SessionManager;
   config: ImQQBotConfig;
+  isAdministrator?: (senderId: string) => boolean;
+  cancelQueued?: (scope: 'c2c' | 'group', peerId: string) => void;
 }
 
 /** 命令分类：agent = 底层 agent 通用能力，qqbot = 插件特有 */

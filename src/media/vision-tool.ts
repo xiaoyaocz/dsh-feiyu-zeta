@@ -25,6 +25,10 @@ import type {
 import type { VisionConfig } from '../config.ts';
 import type { Logger } from '../types.ts';
 
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap { 'qqbot-vision': { kind: 'qqbot-vision' } }
+}
+
 /** 通过 dsh-llm 的 ImageBlock 间接引用 dsh-attachment 类型，避免直接依赖 dsh-attachment */
 type ImageAttachmentRef = ImageBlock['attachment'];
 type ImageMediaType = ImageAttachmentRef['mediaType'];
@@ -125,7 +129,7 @@ async function callVision(
       { type: 'image', attachment: imageRef },
       { type: 'text', text: prompt },
     ],
-    source: { kind: 'plugin', plugin: 'dsh-im-qqbot' },
+    source: { kind: 'qqbot-vision' },
   });
 
   const options: GenerateOptions = {
@@ -150,6 +154,17 @@ async function callVision(
     .trim();
   if (text.length === 0) throw new Error('qqbot_describe_image: vision model returned no text');
   return text;
+}
+
+/** Owner-facing persona inspection uses the same configured vision provider. */
+export async function describeLocalImage(ctx: Context, vision: VisionConfig, image: string, prompt: string, signal: AbortSignal): Promise<string> {
+  if (!vision.enabled || !vision.provider || !vision.model) throw new Error('请先在QQ连接设置启用视觉模型，或手动填写外貌描述。人设原图仍可用于自画像。');
+  const llm = ctx.get('llm') as LlmRuntimeLike | undefined;
+  const attachments = ctx.get('attachments') as AttachmentStoreLike | undefined;
+  if (!llm?.stream || !attachments?.saveImage) throw new Error('视觉模型或图片服务暂不可用');
+  const loaded = await loadImageBytes(image, vision.maxBytes, signal);
+  const reference = await attachments.saveImage({ data: loaded.data, mediaType: loaded.mediaType, name: basename(image) });
+  return callVision(llm, vision, prompt, reference, signal);
 }
 
 /** 展开 `~`/`~/`/`~\` 前缀 */

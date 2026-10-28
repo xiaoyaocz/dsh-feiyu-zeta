@@ -1,5 +1,5 @@
 /**
- * QQ 机器人配置面板 — 必要配置的 UI 编辑
+ * dsh-feiyu-zeta QQ 接入配置面板 — 必要配置的 UI 编辑
  *
  * UI 复刻 DSW 通用设置（settings-form 原语）的视觉风格：
  * 左对齐设置列、0.5px 行分隔、label 13px/500、控件右置；
@@ -334,7 +334,7 @@ export function ConfigPanel(): ReactNode {
   const dirty = (Object.keys(form) as Array<keyof ConfigWire>).some((key) => !shallowEqual(form[key], initial[key]));
   const access: AccessControlWire = form.access ?? { c2cMode: 'open', c2cAllow: [], groupMode: 'open', groupAllow: [] };
 
-  return createElement('form', { className: 'imqb2-form', onSubmit: submit },
+  return createElement('form', { className: 'imqb2-form', onSubmit: submit, 'aria-label': 'dsh-feiyu-zeta QQ 接入配置' },
     createElement('div', { className: 'imqb2-group-title' }, '服务范围'),
     createElement(SegmentedRow, {
       label: '私聊', value: access.c2cMode, options: MODE_OPTIONS,

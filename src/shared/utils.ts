@@ -10,10 +10,13 @@ import { basename, dirname, resolve } from 'node:path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const PLUGIN_ROOT = resolve(__dirname, '../..');
+export const PLUGIN_ROOT = resolve(__dirname, '../..');
 
 /** 插件版本号（从 package.json 读取，供 help/version 等展示真实版本） */
 export const PLUGIN_VERSION = readPluginVersion();
+export const PLUGIN_PACKAGE_NAME = 'dsh-feiyu-zeta';
+/** Legacy package aliases are read-only migration identities. */
+export const PLUGIN_PACKAGE_ALIASES = [PLUGIN_PACKAGE_NAME, 'dsh-zeta'] as const;
 
 function readPluginVersion(): string {
   try {
@@ -28,10 +31,10 @@ function readPluginVersion(): string {
 /**
  * 构造 User-Agent 头
  *
- * 格式: dsh-qqbot/{version} (Node/{nodeVersion}; {platform})
+ * 格式: dsh-feiyu-zeta/{version} (Node/{nodeVersion}; {platform})
  */
 export function buildUserAgent(): string {
-  return `dsh-qqbot/${PLUGIN_VERSION} (Node/${process.versions.node}; ${os.platform()})`;
+  return `${PLUGIN_PACKAGE_NAME}/${PLUGIN_VERSION} (Node/${process.versions.node}; ${os.platform()})`;
 }
 
 /**

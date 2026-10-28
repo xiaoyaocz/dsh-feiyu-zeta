@@ -6,7 +6,7 @@
 import type { CommandDeps, CategorizedCommand } from './types.ts';
 import { getScopePeer, sendMarkdownChunked } from '../shared/index.ts';
 
-export function presetCommand({ manager, config }: CommandDeps): CategorizedCommand {
+export function presetCommand({ manager, config, isAdministrator }: CommandDeps): CategorizedCommand {
   return {
     name: 'preset',
     category: 'agent',
@@ -14,6 +14,7 @@ export function presetCommand({ manager, config }: CommandDeps): CategorizedComm
     handler: async (cmdCtx) => {
       const { scope, peerId } = getScopePeer(cmdCtx);
       const args = (cmdCtx.command?.raw ?? '').trim();
+      if (args && !isAdministrator?.(cmdCtx.message.senderId)) return '只有管理员可以修改Agent配置。';
 
       // 无参数：列出可用 preset + 当前
       if (!args) {

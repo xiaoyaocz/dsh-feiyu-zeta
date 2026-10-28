@@ -8,6 +8,7 @@
  * 协议的闭合集合，无 allow-always，只提供「允许一次 / 拒绝」两个按钮。
  */
 import type { EventOptions } from '@deepseek-ai/cordis';
+import { randomUUID } from 'node:crypto';
 import type { InteractionEvent } from '@tencent-connect/qqbot-nodejs';
 import type { ChatScope, Logger, ReplyTarget } from '../types.ts';
 import { decodeButtonData } from './button-utils.ts';
@@ -74,6 +75,13 @@ interface PendingApproval {
   request: ApprovalRequest;
   resolve: (outcome: ApprovalOutcome) => void;
   onAbort?: () => void;
+  token: string;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
+export interface ApprovalAuthorization {
+  canRequest(request: ApprovalRequest): boolean;
+  canApprove(request: ApprovalRequest, event: InteractionEvent): boolean;
 }
 
 const COMMAND_CLIP = 500;
@@ -119,6 +127,7 @@ export class ApprovalChannel {
     manager: ApprovalChannelManagerLike,
     sender: ApprovalChannelSenderLike,
     logger: Logger,
+    private readonly authorization: ApprovalAuthorization = { canRequest: () => false, canApprove: () => false },
   ) {
     this.manager = manager;
     this.sender = sender;
@@ -141,7 +150,7 @@ export class ApprovalChannel {
       const request = req as ApprovalRequest;
       const nextFn = next as () => Promise<ApprovalOutcome>;
       const record = self.manager.findBySessionId(request.agent.id);
-      if (record) return self.park(record, request);
+      if (record) return self.authorization.canRequest(request) ? self.park(record, request) : Promise.resolve('rejected');
       return nextFn();
     }, { global: true, prepend: true });
     this.logger.info('im-qqbot: QQ approval channel installed');
@@ -155,6 +164,7 @@ export class ApprovalChannel {
     this.removeAbort(entry);
     entry.resolve('cancelled');
   }
+  public uninstall(): void { for (const key of this.pending.keys()) this.cancelPending(key); }
 
   /** 按钮点击决策：解码 button_data，settle pending 审批 */
   public handleInteraction(event: InteractionEvent): boolean {
@@ -170,6 +180,7 @@ export class ApprovalChannel {
     if (!data) return false;
     const button = decodeButtonData(data);
     if (!button || button.t !== 'approval') return false;
+    if ((button.d !== 'allow' && button.d !== 'deny') || button.q !== entry.token || !this.authorization.canApprove(entry.request, event)) return false;
 
     this.pending.delete(record.sessionKey);
     this.removeAbort(entry);
@@ -182,37 +193,37 @@ export class ApprovalChannel {
     const key = record.sessionKey;
     // 会话回收/取消可能在发送前发生：signal 已 abort 则直接失败
     if (request.signal?.aborted) return 'cancelled';
-
+    this.cancelPending(key);
+    let settle!: (outcome: ApprovalOutcome) => void;
+    const result = new Promise<ApprovalOutcome>(resolve => { settle = resolve; });
+    const entry: PendingApproval = { record, request, resolve: settle, token: randomUUID() };
+    this.pending.set(key, entry);
+    const cancel = (): void => {
+      if (this.pending.get(key) !== entry) return;
+      this.pending.delete(key); this.removeAbort(entry); settle('cancelled');
+    };
+    if (request.signal) { entry.onAbort = cancel; request.signal.addEventListener('abort', cancel, { once: true }); }
+    entry.timer = setTimeout(cancel, 5 * 60 * 1000);
     const command = commandOf(request);
     try {
       await this.sender.sendMarkdown(
         record.replyTarget,
         buildApprovalText(request, command),
-        { keyboard: buildApprovalKeyboard() },
+        { keyboard: buildApprovalKeyboard(entry.token) },
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`im-qqbot: approval send failed key=${key}: ${msg}`);
-      return 'unavailable'; // 无法呈现审批，fail-closed
+      if (this.pending.get(key) === entry) { this.pending.delete(key); this.removeAbort(entry); settle('unavailable'); }
+      return result;
     }
 
-    return new Promise<ApprovalOutcome>((resolve) => {
-      const entry: PendingApproval = { record, request, resolve };
-      if (request.signal) {
-        const onAbort = (): void => {
-          if (this.pending.get(key) !== entry) return;
-          this.pending.delete(key);
-          resolve('cancelled');
-        };
-        entry.onAbort = onAbort;
-        request.signal.addEventListener('abort', onAbort, { once: true });
-      }
-      this.pending.set(key, entry);
-      this.logger.info(`im-qqbot: approval sent to QQ, waiting for decision key=${key}`);
-    });
+    this.logger.info(`im-qqbot: approval sent to QQ, waiting for decision key=${key}`);
+    return result;
   }
 
   private removeAbort(entry: PendingApproval): void {
+    if (entry.timer) clearTimeout(entry.timer);
     if (entry.onAbort && entry.request.signal) {
       entry.request.signal.removeEventListener('abort', entry.onAbort);
     }

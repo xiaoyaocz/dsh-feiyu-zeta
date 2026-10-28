@@ -26,6 +26,9 @@ import { startMediaCleanup } from '../media/media-cleaner.ts';
 import { ensureVisionInputModal, registerDescribeImageTool } from '../media/vision-tool.ts';
 import { registerSendFileTool, type MediaSenderLike } from '../media/send-file-tool.ts';
 import { DeliverablesDeliverer } from '../transport/deliverables.ts';
+import type { ZetaRuntime } from '../zeta/runtime.ts';
+import { observeGroupLifecycle } from '../zeta/discovery.ts';
+import { GroupInbox } from '../transport/group-inbox.ts';
 
 /**
  * interaction 统一分发器：按 button_data 的顶层 `t` 判别字段，路由到对应
@@ -47,8 +50,31 @@ export async function bootstrapGateway(
   agents: DshAgentRegistry,
   config: ImQQBotConfig,
   logger: Logger,
+  zeta?: ZetaRuntime,
 ): Promise<void> {
   const manager = new SessionManager(ctx, agents, config, logger);
+  const groupInbox = new GroupInbox<MiddlewareContext>(
+    () => zeta?.state.settings.group ?? { waitMs: 2000, maxWaitMs: 6000 },
+    async batch => {
+      const watchdog = config.processingTimeoutMs > 0 ? setTimeout(() => { for (const item of batch) item.abort('group:processing-timeout'); }, config.processingTimeoutMs) : undefined;
+      try { if (batch[0]) await handleInbound(batch[0], manager, config, logger, zeta, batch); }
+      finally { if (watchdog) clearTimeout(watchdog); }
+    },
+    error => logger.error(`Group batch failed: ${error instanceof Error ? error.message : String(error)}`),
+    config.maxQueue,
+  );
+  const privateInbox = new GroupInbox<MiddlewareContext>(
+    () => ({ waitMs: 0, maxWaitMs: 0 }),
+    async batch => {
+      const watchdog = config.processingTimeoutMs > 0 ? setTimeout(() => { for (const item of batch) item.abort('private:processing-timeout'); }, config.processingTimeoutMs) : undefined;
+      try { if (batch[0]) await handleInbound(batch[0], manager, config, logger, zeta, batch); }
+      finally { if (watchdog) clearTimeout(watchdog); }
+    },
+    error => logger.error(`Private batch failed: ${error instanceof Error ? error.message : String(error)}`),
+    config.maxQueue,
+  );
+  zeta?.configureAccess(config.access);
+  zeta?.configureQQ(config);
 
   // ── 初始化 QQ Bot SDK ──
   const userAgent = buildUserAgent();
@@ -64,17 +90,29 @@ export async function bootstrapGateway(
   logger.info(`QQBot SDK initialized (UA: ${userAgent})`);
 
   // ── 中间件链 ──
-  setupMiddlewares(bot, config, manager, logger);
+  setupMiddlewares(bot, config, manager, logger, zeta, (scope, peerId) => { if (scope === 'group') groupInbox.cancel(peerId); else privateInbox.cancel(peerId); });
+
+  if (zeta) {
+    try {
+      bot.on('rawEvent', async (event) => {
+        try { await zeta.waitForMaintenance(); await observeGroupLifecycle(config.appId, zeta.state, event, config.access); }
+        catch { logger.warn('群会话状态更新失败。'); }
+      });
+    } catch {
+      logger.warn('当前QQ SDK不提供群状态事件，会话仍可通过收到的消息发现。');
+    }
+  }
 
   // ── 入站：经过中间件链后的消息交给 dsh agent ──
   bot.on('message', async (mCtx: MiddlewareContext) => {
     const msg = mCtx.message;
     // 记录最近 msgId，供无上下文的出站发送（文件发送显式 target、主动推送等）获取被动回复目标
-    cacheMsgId(mCtx.replyTarget.scope, mCtx.replyTarget.targetId, mCtx.replyTarget.msgId);
+    if (!zeta) cacheMsgId(mCtx.replyTarget.scope, mCtx.replyTarget.targetId, mCtx.replyTarget.msgId);
     if (config.debug) {
       logger.debug(`← message (post-middleware): ${JSON.stringify(msg, null, 2).slice(0, 500)}`);
     }
-    await handleInbound(mCtx, manager, config, logger);
+    if (msg.kind === 'group') await groupInbox.enqueue(msg.groupOpenid ?? msg.senderId, mCtx);
+    else await privateInbox.enqueue(msg.senderId, mCtx);
   });
 
   // ── 出站：dsh session/event → QQ 消息 ──
@@ -109,11 +147,12 @@ export async function bootstrapGateway(
     sendVoice: (target, source) => bot.sendVoice(resolveReplyTarget(target, replyLimiter, false), source),
     sendFile: (target, source, opts) => bot.sendFile(resolveReplyTarget(target, replyLimiter, false), source, opts),
   };
+  zeta?.attachGateway({ manager, sender, mediaSender }, config.appId);
 
   // 交付物投递：present 声明的文件在轮末发送到当前会话（outbound 路由触发）
-  const deliverablesDeliverer = new DeliverablesDeliverer(sender, mediaSender, config, logger);
+  const deliverablesDeliverer = new DeliverablesDeliverer(sender, mediaSender, config, logger, zeta);
 
-  const outbound = createOutboundHandler(manager, sender, config, logger, toolsRegistry, deliverablesDeliverer);
+  const outbound = createOutboundHandler(manager, sender, config, logger, toolsRegistry, deliverablesDeliverer, record => record.replyTarget.scope !== 'group');
   (ctx as unknown as { on(event: string, handler: (...args: unknown[]) => void): void })
     .on('session/event', outbound.routeSessionEvent as (...args: unknown[]) => void);
 
@@ -133,7 +172,13 @@ export async function bootstrapGateway(
   questionChannel.install(ctx);
 
   // ── 审批通道（approval/request → QQ 两按钮审批） ──
-  const approvalChannel = new ApprovalChannel(manager, sender, logger);
+  const approvalChannel = new ApprovalChannel(manager, sender, logger, {
+    canRequest: request => zeta?.canApprove(request.agent) ?? false,
+    canApprove: (request, event) => {
+      const senderId = event.group_openid ? event.group_member_openid ?? event.user_openid : event.user_openid;
+      return !!senderId && (zeta?.canApprove(request.agent, senderId) ?? false);
+    },
+  });
   manager.approvalChannel = approvalChannel;
   approvalChannel.install(ctx as unknown as ApprovalChannelContext);
 
@@ -183,7 +228,8 @@ export async function bootstrapGateway(
   registerDescribeImageTool(ctx, config.vision, logger);
 
   // ── 附件发送工具注册（qqbot_send_file，发送器见上方 mediaSender） ──
-  registerSendFileTool(ctx, mediaSender, manager, config, logger);
+  zeta?.configureFileRoots([config.cwd || process.cwd(), ...config.sendFile.extraRoots]);
+  registerSendFileTool(ctx, mediaSender, manager, config, logger, zeta);
 
   // ── 生命周期 ──
   (ctx as unknown as { effect(fn: () => (() => Promise<void>) | void, name?: string): void })
@@ -195,6 +241,10 @@ export async function bootstrapGateway(
 
       return async () => {
         logger.info('Shutting down');
+        groupInbox.dispose();
+        privateInbox.dispose();
+        approvalChannel.uninstall();
+        questionChannel.uninstall();
         await manager.disposeAll();
         bot.stop();
       };

@@ -49,6 +49,7 @@ function setup(opts?: {
   record?: SessionRecord | undefined;
   config?: ImQQBotConfig;
   deliverer?: { deliver: ReturnType<typeof vi.fn> };
+  allowAutomatic?: (record: SessionRecord) => boolean;
 }) {
   const session = createSession();
   const bot = createBot(session);
@@ -57,13 +58,29 @@ function setup(opts?: {
     findBySessionId: vi.fn((id: string) => (id === 'sess-qq' ? record : undefined)),
   } as unknown as SessionManager;
   const outbound = createOutboundHandler(
-    manager, bot, opts?.config ?? createConfig(), createLogger(), undefined, opts?.deliverer,
+    manager, bot, opts?.config ?? createConfig(), createLogger(), undefined, opts?.deliverer, opts?.allowAutomatic,
   );
   return { outbound, bot, session };
 }
 
 const delta = (attemptId: string, text: string) => ({ kind: 'text-delta' as const, attemptId, text });
 const start = (attemptId: string) => ({ kind: 'attempt-start' as const, attemptId });
+
+describe('intentional group silence', () => {
+  it('sends no automatic final text, placeholder, tool failure, turn failure or presented file', async () => {
+    const deliverer = { deliver: vi.fn() };
+    const { outbound, bot } = setup({ record: createRecord(groupTarget), deliverer, allowAutomatic: record => record.replyTarget.scope !== 'group' });
+    const session = { header: { id: 'sess-qq' } };
+    outbound.routeStreamFrame('sess-qq', start('a'));
+    outbound.routeStreamFrame('sess-qq', delta('a', '（不回复）'));
+    outbound.routeSessionEvent(session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '（不回复）' }] } } });
+    outbound.routeSessionEvent(session, { type: 'tool/call', data: { callId: 'call', name: 'bash', arguments: '{}' } });
+    outbound.routeSessionEvent(session, { type: 'tool/result', data: { message: { source: { callId: 'call' } }, error: { name: 'Error', code: 'DENIED' } } });
+    outbound.routeSessionEvent(session, { type: 'deliverables/presented', data: { turn: 1, callId: 'present', files: [{ path: '/report.txt' }] } });
+    outbound.routeSessionEvent(session, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'FAILED', message: 'oops' } } } });
+    await Promise.resolve(); expect(bot.sendMarkdown).not.toHaveBeenCalled(); expect(bot.openStream).not.toHaveBeenCalled(); expect(deliverer.deliver).not.toHaveBeenCalled();
+  });
+});
 
 describe('OutboundRouter.routeStreamFrame', () => {
   beforeEach(() => {

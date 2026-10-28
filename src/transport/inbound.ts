@@ -21,6 +21,7 @@ import {
 } from './attachment.ts';
 import { clearGroupHistory } from '../features/history-store.ts';
 import type { MiddlewareContext } from '@tencent-connect/qqbot-nodejs';
+import type { ZetaRuntime } from '../zeta/runtime.ts';
 
 // ── 类型定义 ──
 
@@ -90,9 +91,11 @@ export async function handleInbound(
   manager: SessionManager,
   config: ImQQBotConfig,
   logger: Logger,
+  zeta?: ZetaRuntime,
+  batch: MiddlewareContext[] = [ctx],
 ): Promise<void> {
+  await zeta?.waitForMaintenance();
   const msg = ctx.message as unknown as ProcessedMessage;
-  const mwState = ctx.state as MiddlewareState;
   const { bot } = ctx;
 
   const scope: ChatScope = msg.kind === 'group' ? 'group' : 'c2c';
@@ -105,7 +108,13 @@ export async function handleInbound(
   };
 
   // ── 组装 agentBody（下载结果经 mwState.downloadedFiles 提供） ──
-  const agentBody = assembleAgentBody(msg, mwState, scope, logger);
+  const messages = batch.map(item => ({ message: item.message as unknown as ProcessedMessage, state: item.state as MiddlewareState }));
+  const batchIds = new Set(messages.map(item => item.message.messageId));
+  const agentBody = messages.map(({ message, state }, index) => {
+    const filtered = { ...state, history: index === 0 ? state.history?.filter(entry => !batchIds.has(entry.messageId)) : [] };
+    const body = assembleAgentBody(message, filtered, scope, logger);
+    return body && scope === 'group' ? `[消息 ${message.messageId} · ${message.timestamp}]\n${body}` : body;
+  }).filter(Boolean).join('\n\n');
 
   if (!agentBody) return;
 
@@ -115,13 +124,17 @@ export async function handleInbound(
   let record;
   try {
     record = await manager.getOrCreate(scope, peerId, msg.senderId, replyTarget);
+    if (zeta) {
+      await zeta.bindRecord(record);
+      zeta.noteAttachments(record.agent, messages.flatMap(item => [...(item.state.downloadedFiles ?? []), ...(item.state.downloadedQuoteFiles ?? [])]).map(file => file.localPath));
+      zeta.beginRequest(record.agent, messages.map(item => ({ senderId: item.message.senderId, messageId: item.message.messageId, text: item.message.content })), scope === 'group');
+    }
   } catch (err) {
     logger.error(`ERROR creating session: ${err instanceof Error ? err.message : String(err)}`);
     // 兜底回复：会话创建失败时告知用户，避免静默无响应
-    try {
-      await bot.sendMarkdown(replyTarget, '⚠️ 处理消息时出现异常，请稍后重试。');
-    } catch (sendErr) {
-      logger.error(`fallback reply failed: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`);
+    if (scope !== 'group') {
+      try { await bot.sendMarkdown(replyTarget, '⚠️ 处理消息时出现异常，请稍后重试。'); }
+      catch (sendErr) { logger.error(`fallback reply failed: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`); }
     }
     return;
   }
@@ -134,19 +147,23 @@ export async function handleInbound(
     source: { kind: 'user' as const },
   });
 
-  record.agent.followup(message);
-  logger.info(`→ followup sent: key=${scope}:${peerId}`);
-
-  // 群消息回复后清空历史缓存（避免下次 @ 时重复组包）
-  if (scope === 'group') {
-    clearGroupHistory(config.appId, msg.groupOpenid ?? msg.senderId);
-  }
-
+  const abort = (): void => { record.agent.cancel({ kind: 'user' }); };
+  for (const item of batch) item.signal.addEventListener('abort', abort, { once: true });
+  if (batch.some(item => item.signal.aborted)) { for (const item of batch) item.signal.removeEventListener('abort', abort); zeta?.endRequest(record.agent); return; }
   // 阻塞等待本轮 turn 收敛，避免后续消息在 turn 运行期间被 followup 打断
   try {
+    record.agent.followup(message);
+    logger.info(`→ followup sent: key=${scope}:${peerId}`);
+    if (scope === 'group') {
+      clearGroupHistory(config.appId, msg.groupOpenid ?? msg.senderId);
+      await zeta?.state.consumeMigrationGroup(config.appId, msg.groupOpenid ?? msg.senderId);
+    }
     await record.agent.whenIdle();
   } catch (err) {
     logger.warn(`whenIdle rejected: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    for (const item of batch) item.signal.removeEventListener('abort', abort);
+    zeta?.endRequest(record.agent);
   }
 }
 
@@ -343,9 +360,9 @@ function buildAgentBody(
   base: string,
   history: HistoryEntry[] | undefined,
   isGroup: boolean,
-  wasMentioned: boolean,
+  _wasMentioned: boolean,
 ): string {
-  if (!isGroup || !wasMentioned || !history || history.length === 0) {
+  if (!isGroup || !history || history.length === 0) {
     return base;
   }
 

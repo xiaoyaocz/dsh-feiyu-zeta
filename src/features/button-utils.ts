@@ -32,6 +32,7 @@ export interface QuestionButtonData {
 export interface ApprovalButtonData {
   t: 'approval';
   d: 'allow' | 'deny';
+  q?: string;
 }
 
 export type ButtonData = QuestionButtonData | ApprovalButtonData;

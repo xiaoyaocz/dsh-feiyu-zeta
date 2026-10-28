@@ -10,7 +10,6 @@ export type {
   SessionEventLike,
   DshAgent,
   DshAgentHandle,
-  SessionsService,
   DshAgentRegistry,
   AgentPresetsLike,
   PresetComposition,

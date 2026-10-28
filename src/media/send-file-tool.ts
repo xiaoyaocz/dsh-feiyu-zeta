@@ -14,6 +14,7 @@ import type { ImQQBotConfig } from '../config.ts';
 import type { DshAgent, SessionManager } from '../session/index.ts';
 import type { Logger, ReplyTarget } from '../types.ts';
 import { isPathAllowed, sendMediaFile, type MediaSenderLike } from './send-media.ts';
+import type { ZetaRuntime } from '../zeta/runtime.ts';
 
 /** 工具名（qqbot 前缀避免与其他通道的同名工具冲突） */
 export const SEND_FILE_TOOL_NAME = 'qqbot_send_file';
@@ -55,6 +56,7 @@ export function registerSendFileTool(
   manager: SessionManager,
   config: ImQQBotConfig,
   logger: Logger,
+  zeta?: ZetaRuntime,
 ): void {
   const tools = ctx.get('tools') as ToolsRegistryLike | undefined;
   if (!tools?.register) {
@@ -104,6 +106,10 @@ export function registerSendFileTool(
       const { file_path, target } = args as SendFileArgs;
       if (typeof file_path !== 'string' || file_path.length === 0) {
         throw new Error('qqbot_send_file: `file_path` must be a non-empty string');
+      }
+      if (zeta) {
+        const result = await zeta.sendFile(exec.agent, resolve(file_path), target, exec.signal);
+        return { fileName: result.fileName, fileSize: result.size, target: result.target, fileUuid: result.fileUuid ?? '', ...(result.messageId ? { messageId: result.messageId } : {}) };
       }
 
       // 1. 解析发送目标：显式 target > 当前会话（exec.agent → SessionRecord）

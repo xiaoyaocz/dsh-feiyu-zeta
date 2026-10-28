@@ -12,7 +12,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { Logger } from '../types.ts';
 
 /** 富媒体下载根目录（attachment.ts 复用） */
-export const MEDIA_ROOT = resolve(homedir(), '.dsh-qqbot', 'media');
+export const MEDIA_ROOT = resolve(process.env.DSH_HOME || resolve(homedir(), '.dsh'), 'zeta', 'qq-media');
 
 /** 定期清理间隔（毫秒），固定 1 小时 */
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;

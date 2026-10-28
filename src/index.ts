@@ -1,5 +1,5 @@
 /**
- * dsh-im-qqbot — QQ Bot IM channel plugin for deepseek-harness
+ * dsh-feiyu-zeta — QQ companion plugin for deepseek-harness
  *
  * Cordis 插件入口。将 QQ 消息平台作为 dsh 的前端协议驱动。
  * 网关组装（中间件编排 + 事件 + 出站 + 生命周期）见 src/gateway/；
@@ -12,10 +12,11 @@ import type { DshAgentRegistry } from './session/index.ts';
 import { getProfileDir, resolveEnv } from './shared/index.ts';
 import { ensureCredentials, persistCredentialsToProfile, registerBoundCredentialRoutes } from './setup/index.ts';
 import type { Logger } from './types.ts';
+import { createZeta } from './zeta/index.ts';
 
 // ── Cordis 插件元数据 ──
-export const name = 'im-qqbot';
-export const inject = ['agents'];
+export const name = 'dsh-feiyu-zeta';
+export const inject = ['agents', 'sessions', 'tools', 'systemPrompt', 'storageDomain', 'credentials', 'schedule', 'sessionController', 'sessionPersistence', 'attachments', 'agentPresets', 'connection', 'configEditor', 'settings', 'llm'];
 export const Config = ConfigSchema;
 
 export type { ImQQBotConfig } from './config.ts';
@@ -27,6 +28,12 @@ export async function apply(ctx: Context, config: ImQQBotConfig): Promise<void> 
 
   let appId = resolveEnv(config.appId, 'QQBOT_APPID');
   let appSecret = resolveEnv(config.appSecret, 'QQBOT_SECRET');
+  const zeta = await createZeta(ctx, appId, config.zeta?.dataDir);
+  zeta.configureQQ({ ...config, appId, appSecret });
+  const migration = zeta.state.migration;
+  if (migration?.status === 'complete' && migration.activationPending && config.zeta?.connectQQ !== false && zeta.dataDir === migration.dataRoot) await zeta.state.setMigration({ ...migration, activationPending: false, qqPaused: false, restartRequired: false });
+  if (zeta.state.migration?.status === 'restoring') { logger.warn('迁移尚未完成，请先在备份页继续恢复，QQ连接保持关闭'); return; }
+  if (config.zeta?.connectQQ === false) { logger.info('dsh-feiyu-zeta功能已加载，QQ网关按配置关闭'); return; }
 
   // ── 凭据缺失时唤起扫码绑定 ──
   if (!appId || !appSecret) {
@@ -60,7 +67,7 @@ export async function apply(ctx: Context, config: ImQQBotConfig): Promise<void> 
           ...config,
           appId: credentials.appId,
           appSecret: credentials.appSecret,
-        }, logger).catch((err: unknown) => {
+        }, logger, zeta).catch((err: unknown) => {
           logger.error(`网关启动失败: ${err instanceof Error ? err.message : String(err)}`);
         });
       })
@@ -78,5 +85,5 @@ export async function apply(ctx: Context, config: ImQQBotConfig): Promise<void> 
 
   const resolvedConfig: ImQQBotConfig = { ...config, appId, appSecret };
 
-  await bootstrapGateway(ctx, agents, resolvedConfig, logger);
+  await bootstrapGateway(ctx, agents, resolvedConfig, logger, zeta);
 }

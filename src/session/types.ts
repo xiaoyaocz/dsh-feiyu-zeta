@@ -10,6 +10,7 @@ export type AgentSetup = (agentCtx: Context) => Promise<void> | void;
 /** dsh SessionEvent 简化类型（用于统计 token 用量 / 导出） */
 export interface SessionEventLike {
   type: string;
+  data?: { usage?: SessionEventLike['usage']; message?: SessionEventLike['message'] };
   seq?: number;
   usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
   message?: {
@@ -74,11 +75,6 @@ export interface DshAgentHandle {
   dispose(): Promise<void>;
 }
 
-/** sessions 服务（fork 能力） */
-export interface SessionsService {
-  fork(source: unknown, boundary?: number): { events: readonly unknown[] };
-}
-
 export interface DshAgentRegistry {
   /** 获取进程内已存活的 agent */
   get(sessionId: string): DshAgent | undefined;
@@ -91,7 +87,7 @@ export interface DshAgentRegistry {
   /** 创建全新 session */
   create(options: {
     sessionId: string;
-    meta?: { cwd?: string; parentSession?: string; seedLength?: number; agentPreset?: string };
+    meta?: { cwd?: string; parentSession?: string; isSeeded?: boolean; agentPreset?: string };
     seed?: readonly unknown[];
     agentOptions?: { provider?: string; model?: string };
     setup?: AgentSetup;

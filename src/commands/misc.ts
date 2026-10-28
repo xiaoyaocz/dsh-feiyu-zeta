@@ -5,7 +5,12 @@
  * - /stop：中止当前生成（对应底层 agent cancel，通用能力）
  */
 import type { CommandDeps, CategorizedCommand } from './types.ts';
-import { getScopePeer, PLUGIN_VERSION } from '../shared/index.ts';
+import { getScopePeer, PLUGIN_PACKAGE_NAME, PLUGIN_VERSION } from '../shared/index.ts';
+
+/** Report the gateway-authenticated identity so owners can configure the admin list. */
+export function identityCommand({ config }: CommandDeps): CategorizedCommand {
+  return { name: 'bot-whoami', category: 'qqbot', description: '查看自己的真实QQ接口身份（管理员名单使用此ID）', handler: ctx => `机器人 AppID: ${config.appId}\n你的QQ接口身份: ${ctx.message.senderId}\n场景: ${ctx.message.kind === 'group' ? '群聊' : '私聊'}\n请将此身份交给DSH管理页所有者配置；昵称、群号和自称管理员不能授予权限。` };
+}
 
 /** /bot-ping — 测试当前 dsh 与 QQ 连接的网络延迟 */
 export function pingCommand(): CategorizedCommand {
@@ -48,13 +53,13 @@ export function versionCommand({ manager }: CommandDeps): CategorizedCommand {
     handler: () => {
       const current = manager.getEffectiveModel('c2c', '');
       const modelInfo = current ? `${current.provider}/${current.model}` : '宿主默认';
-      return `dsh-qqbot v${PLUGIN_VERSION} | model: ${modelInfo}`;
+      return `${PLUGIN_PACKAGE_NAME} v${PLUGIN_VERSION} | model: ${modelInfo}`;
     },
   };
 }
 
 /** /stop — 中止当前生成（隐藏） */
-export function stopCommand({ manager }: CommandDeps): CategorizedCommand {
+export function stopCommand({ manager, cancelQueued }: CommandDeps): CategorizedCommand {
   return {
     name: 'stop',
     category: 'agent',
@@ -62,6 +67,7 @@ export function stopCommand({ manager }: CommandDeps): CategorizedCommand {
     hidden: true,
     handler: (cmdCtx) => {
       const { scope, peerId } = getScopePeer(cmdCtx);
+      cancelQueued?.(scope, peerId);
       const record = manager.getSessionRecord(scope, peerId);
       // 会话存在不等于正在生成：只有 agent 处于 running 才算有进行中的回复
       if (record === undefined || record.agent.status !== 'running') {

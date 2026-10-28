@@ -33,7 +33,7 @@ export function buildApprovalText(request: ApprovalRequest, command?: string): s
  * 无 allow-always，因此只提供两个按钮；`group_id` 相同实现单选互斥变灰。
  * button_data 编码 `{"t":"approval","d":"allow"|"deny"}`，由分发器解码。
  */
-export function buildApprovalKeyboard(): InlineKeyboard {
+export function buildApprovalKeyboard(token?: string): InlineKeyboard {
   const allow = {
     id: 'approval-allow',
     render_data: { label: '✅ 允许一次', visited_label: '✓ 已允许', style: 1 },
@@ -41,7 +41,7 @@ export function buildApprovalKeyboard(): InlineKeyboard {
       type: 1,
       permission: { type: 2 },
       click_limit: 1,
-      data: encodeButtonData({ t: 'approval', d: 'allow' }),
+      data: encodeButtonData({ t: 'approval', d: 'allow', ...(token ? { q: token } : {}) }),
     },
     group_id: 'approval',
   };
@@ -52,7 +52,7 @@ export function buildApprovalKeyboard(): InlineKeyboard {
       type: 1,
       permission: { type: 2 },
       click_limit: 1,
-      data: encodeButtonData({ t: 'approval', d: 'deny' }),
+      data: encodeButtonData({ t: 'approval', d: 'deny', ...(token ? { q: token } : {}) }),
     },
     group_id: 'approval',
   };

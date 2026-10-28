@@ -17,7 +17,7 @@ export interface AccessControlConfig {
 export interface MediaConfig {
   /** 是否启用富媒体理解（图片/视频下载 + 工具分析） */
   enabled: boolean;
-  /** 富媒体下载大小上限（MB），默认 200 */
+  /** 富媒体下载大小上限（MiB），硬上限 30 */
   maxMB: number;
   /** 富媒体存活时长（小时，TTL），默认 24，0 = 永不过期 */
   ttlHours: number;
@@ -53,6 +53,7 @@ export interface SendFileConfig {
 }
 
 export interface ImQQBotConfig {
+  zeta?: { dataDir?: string; connectQQ?: boolean };
   /** QQ Bot AppID */
   appId: string;
   /** QQ Bot AppSecret */
@@ -108,13 +109,14 @@ export const AccessControlSchema: Schema<AccessControlConfig> = Schema.object({
 });
 
 export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
+  zeta: Schema.object({ dataDir: Schema.string().description('Zeta素材持久目录，留空使用DSH主目录中的zeta'), connectQQ: Schema.boolean().default(true).description('启动QQ网关；隔离验证时可关闭') }).default({ connectQQ: true }),
   appId: Schema.string().default('').description('QQ 机器人 AppID'),
-  appSecret: Schema.string().default('').description('QQ 机器人 AppSecret'),
+  appSecret: Schema.string().default('').role('secret').description('QQ 机器人 AppSecret'),
   provider: Schema.string().description('LLM provider name'),
   model: Schema.string().description('Model name'),
   preset: Schema.string().description('Agent preset id'),
   cwd: Schema.string().description('Agent working directory'),
-  requireMention: Schema.boolean().default(true).description('群聊是否需要@bot触发'),
+  requireMention: Schema.boolean().default(false).description('群聊是否只处理@bot消息；关闭后由AI判断实际收到的消息是否需要回复'),
   groupPrompt: Schema.string().description('群聊额外system prompt'),
   directPrompt: Schema.string().description('私聊额外system prompt'),
   textChunkLimit: Schema.number().default(4500).description('单条消息最大字符数'),
@@ -134,11 +136,11 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
   debug: Schema.boolean().default(false),
   media: Schema.object({
     enabled: Schema.boolean().default(true).description('是否启用富媒体理解（图片/视频下载 + 工具分析）'),
-    maxMB: Schema.number().default(200).description('富媒体下载大小上限(MB)'),
+    maxMB: Schema.number().min(1).max(30).default(30).description('富媒体下载大小上限(MiB)，最多30'),
     ttlHours: Schema.number().default(24).description('富媒体存活时长(小时)，0=永不过期'),
   }).default({
     enabled: true,
-    maxMB: 200,
+    maxMB: 30,
     ttlHours: 24,
   }).description('富媒体理解配置'),
   vision: Schema.object({

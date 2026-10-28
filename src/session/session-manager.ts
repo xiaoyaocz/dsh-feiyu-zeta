@@ -14,6 +14,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { SessionId } from '@deepseek-ai/dsh-session';
+import type {} from '@deepseek-ai/dsh-api-session-controller';
 import type { Context } from '@deepseek-ai/cordis';
 import type { ChatScope, Logger, ReplyTarget } from '../types.ts';
 import type { ImQQBotConfig } from '../config.ts';
@@ -26,7 +27,6 @@ import type {
   SessionEventLike,
   DshAgent,
   DshAgentHandle,
-  SessionsService,
   DshAgentRegistry,
   AgentPresetsLike,
   PresetComposition,
@@ -142,17 +142,6 @@ export class SessionManager {
   }
 
   /**
-   * 动态获取 sessions 服务（fork 能力，可选）
-   */
-  private getSessionsService(): SessionsService | undefined {
-    try {
-      return this.ctx.get('sessions') as SessionsService | undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  /**
    * 动态获取 agentPresets 服务（可选，未注入时返回 undefined）
    */
   private getPresetsService(): AgentPresetsLike | undefined {
@@ -168,7 +157,7 @@ export class SessionManager {
    * 读不到（服务缺失 / session 不存在 / 未记录 agentPreset）返回 undefined。
    */
   private async resolvePersistedPreset(sessionId: string): Promise<string | undefined> {
-    let persistence: { load(id: string): Promise<{ meta?: { agentPreset?: string } }> } | undefined;
+    let persistence: { stat(id: string): Promise<{ header?: { agentPreset?: string } } | undefined> } | undefined;
     try {
       persistence = this.ctx.get('sessionPersistence') as typeof persistence | undefined;
     } catch {
@@ -176,8 +165,7 @@ export class SessionManager {
     }
     if (!persistence) return undefined;
     try {
-      const { meta } = await persistence.load(sessionId);
-      return meta?.agentPreset;
+      return (await persistence.stat(sessionId))?.header?.agentPreset;
     } catch {
       return undefined;
     }
@@ -217,21 +205,21 @@ export class SessionManager {
   }
 
   /**
-   * 切换模型（fork + 重建会话，保留历史）
+   * 通过 DSH 原生选择模型，保留当前会话及完整历史。
    */
   async setModelOverride(scope: ChatScope, peerId: string, route: ModelRoute): Promise<void> {
     const key = this.sessionKey(scope, peerId);
 
-    this.modelResolver.setOverride(key, route);
-
     const record = this.sessions.get(key);
     if (!record) {
+      this.modelResolver.setOverride(key, route);
       this.logger.info(`model pref saved (no active session): key=${key} → ${route.provider}/${route.model}`);
       return;
     }
 
-    await this.rebuildSession(record, { route });
-    this.logger.info(`model switched via fork: key=${key} → ${route.provider}/${route.model}`);
+    await this.ctx.sessionController.selectModel({ sessionId: SessionId(record.sessionId), ...route });
+    this.modelResolver.setOverride(key, route);
+    this.logger.info(`model selected: key=${key} → ${route.provider}/${route.model}`);
   }
 
   /**
@@ -276,71 +264,9 @@ export class SessionManager {
     return { ok: true };
   }
 
-  /**
-   * fork + 重建会话（保留历史，换 model）
-   *
-   * options.route 缺省时沿用当前生效值。preset 沿用当前生效 preset（getEffectivePresetByKey）。
-   * fork 不可用或失败时降级为 dispose（下次消息重建）。
-   */
-  private async rebuildSession(
-    record: SessionRecord,
-    options: { route?: ModelRoute },
-  ): Promise<void> {
-    const key = record.sessionKey;
-
-    const sessionsService = this.getSessionsService();
-    if (!sessionsService) {
-      this.logger.warn(`fork unavailable, fallback to dispose: key=${key}`);
-      this.sessions.delete(key);
-      record.agent.cancel({ kind: 'user' });
-      await record.handle.dispose().catch(() => {});
-      return;
-    }
-
-    let seed: readonly unknown[];
-    try {
-      seed = sessionsService.fork(record.agent.session).events;
-    } catch (err) {
-      this.logger.warn(`fork failed, fallback to dispose: key=${key} err=${err instanceof Error ? err.message : String(err)}`);
-      this.sessions.delete(key);
-      record.agent.cancel({ kind: 'user' });
-      await record.handle.dispose().catch(() => {});
-      return;
-    }
-
-    const childId = SessionId(randomUUID());
-    const effectiveRoute = options.route ?? this.modelResolver.getEffectiveRoute(key);
-    const composed = await this.composePreset(this.getEffectivePresetByKey(key));
-    const created = await this.agents.create({
-      sessionId: childId,
-      seed,
-      meta: {
-        cwd: this.config.cwd || process.cwd(),
-        parentSession: record.sessionId,
-        seedLength: seed.length,
-        ...(composed.agentPreset ? { agentPreset: composed.agentPreset } : {}),
-      },
-      ...(effectiveRoute ? { agentOptions: effectiveRoute } : {}),
-      ...(composed.setup ? { setup: composed.setup } : {}),
-    });
-
-    this.modelResolver.setSessionId(key, childId);
-
-    const oldHandle = record.handle;
-    record.sessionId = childId;
-    record.agent = created.agent;
-    record.handle = created;
-    record.agentPreset = composed.agentPreset;
-    record.lastActivity = Date.now();
-
-    void oldHandle.dispose().catch(() => {});
-    this.logger.info(`session rebuilt via fork: key=${key} preset=${composed.agentPreset ?? 'none'} sessionId=${childId}`);
-  }
-
   clearModelOverride(scope: ChatScope, peerId: string): void {
     const key = this.sessionKey(scope, peerId);
     this.modelResolver.clearOverride(key);
-    this.modelResolver.clearSessionId(key);
   }
 
   async listAvailableModels(): Promise<ModelEntry[]> {
@@ -355,6 +281,12 @@ export class SessionManager {
 
   getSessionRecord(scope: ChatScope, peerId: string): SessionRecord | undefined {
     return this.sessions.get(this.sessionKey(scope, peerId));
+  }
+
+  /** Stable current identity, including /new preferences while the Agent is cold. */
+  currentSessionIdFor(scope: ChatScope, peerId: string): string {
+    const key = this.sessionKey(scope, peerId);
+    return this.sessions.get(key)?.sessionId ?? this.currentSessionId(key);
   }
 
   getStatus(scope: ChatScope, peerId: string): SessionStatus {
@@ -380,11 +312,12 @@ export class SessionManager {
     if (!events) return stats;
 
     for (const event of events) {
-      if (event.type !== 'assistant/message' || !event.usage) continue;
-      stats.input += event.usage.input ?? 0;
-      stats.output += event.usage.output ?? 0;
-      stats.cacheRead += event.usage.cacheRead ?? 0;
-      stats.cacheWrite += event.usage.cacheWrite ?? 0;
+      const usage = event.data?.usage ?? event.usage;
+      if (event.type !== 'assistant/message' || !usage) continue;
+      stats.input += usage.input ?? 0;
+      stats.output += usage.output ?? 0;
+      stats.cacheRead += usage.cacheRead ?? 0;
+      stats.cacheWrite += usage.cacheWrite ?? 0;
     }
 
     return stats;
@@ -401,10 +334,10 @@ export class SessionManager {
 
     for (const event of events) {
       if (event.type === 'user/message') {
-        const text = extractMessageText(event.message);
+        const text = extractMessageText(event.data?.message ?? event.message);
         if (text) lines.push(`## 用户\n\n${text}\n`);
       } else if (event.type === 'assistant/message') {
-        const text = extractMessageText(event.message);
+        const text = extractMessageText(event.data?.message ?? event.message);
         if (text) lines.push(`## 助手\n\n${text}\n`);
       }
     }
@@ -622,6 +555,13 @@ export class SessionManager {
     }
     await Promise.allSettled(records.map((r) => r.handle.dispose()));
     this.logger.info(`all sessions disposed (count=${records.length})`);
+  }
+
+  /** Pause only this channel's active work; keep session ownership and mappings. */
+  async quiesce(): Promise<void> {
+    const agents = [...this.sessions.values()].map(record => record.agent);
+    for (const agent of agents) agent.cancel({ kind: 'user' });
+    await Promise.all(agents.map(agent => agent.whenIdle()));
   }
 
   get size(): number {

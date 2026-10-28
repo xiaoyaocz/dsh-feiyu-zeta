@@ -1,6 +1,6 @@
-# dsh-im-qqbot bundle patch
+# dsh-feiyu-zeta bundle patch
 #
-# 当本包通过 `dsh plugin --profile <name> add @tencent-connect/dsh-qqbot` 安装后，
+# 当本包通过 DSH 插件管理器安装后，
 # dsh 启动时自动加载此 patch。
 #
 # 环境变量：
@@ -9,10 +9,20 @@
 #
 # 叠加顺序：dsh-base → 本 bundle patch → profile cordis.patch.yml → --patch
 
+# 在原生Schedule初始化前完成迁移任务恢复；后续完全委托原生服务。
+# patch 的 name 只负责匹配，不能替换模块，因此停用原行并插入包装入口。
+- id: schedule
+  name: '@deepseek-ai/dsh-schedule'
+  disabled: true
+
+- insert:
+    - id: zeta-schedule-bridge
+      name: 'dsh-feiyu-zeta/schedule-bridge'
+
 # ── 插入 im-qqbot 插件行 ──
 - insert:
     - id: im-qqbot
-      name: '@tencent-connect/dsh-qqbot'
+      name: 'dsh-feiyu-zeta'
       config:
         appId: __FROM_ENV__
         appSecret: __FROM_ENV__

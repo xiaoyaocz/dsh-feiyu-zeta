@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { EventOptions } from '@deepseek-ai/cordis';
 import type { InteractionEvent } from '@tencent-connect/qqbot-nodejs';
 import {
-  ApprovalChannel,
+  ApprovalChannel as BaseApprovalChannel,
   type ApprovalOutcome,
   type ApprovalRequest,
   type ApprovalSessionRecordLike,
@@ -10,6 +10,13 @@ import {
 } from './approval-channel.ts';
 import { buildApprovalKeyboard, buildApprovalText } from './approval-renderer.ts';
 import type { ChatScope, Logger, ReplyTarget } from '../types.ts';
+
+class ApprovalChannel extends BaseApprovalChannel {
+  constructor(...args: ConstructorParameters<typeof BaseApprovalChannel>) {
+    super(args[0], args[1], args[2], args[3] ?? { canRequest: () => true, canApprove: (_request, event) => event.user_openid === 'peer-qq' });
+  }
+}
+let lastToken: string | undefined;
 
 function createLogger(): Logger {
   return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -23,6 +30,9 @@ interface SentMessage {
 function createSender(sent: SentMessage[]) {
   return {
     sendMarkdown: vi.fn(async (_target: ReplyTarget, content: string, o?: { keyboard?: unknown }) => {
+      const keyboard = o?.keyboard as { content?: { rows?: Array<{ buttons?: Array<{ action: { data: string } }> }> } } | undefined;
+      const encoded = keyboard?.content?.rows?.[0]?.buttons?.[0]?.action.data;
+      if (encoded) lastToken = (JSON.parse(encoded) as { q?: string }).q;
       sent.push({ text: content, opts: o });
     }),
   };
@@ -66,6 +76,7 @@ function makeRequest(opts?: {
 }
 
 function makeEvent(data: string | undefined, peer: { user?: string; group?: string }): InteractionEvent {
+  if (data) { const parsed = JSON.parse(data) as { t?: string; q?: string }; if (parsed.t === 'approval' && !parsed.q) data = JSON.stringify({ ...parsed, q: lastToken }); }
   return {
     id: 'i1',
     type: 1,
@@ -203,6 +214,28 @@ describe('ApprovalChannel.install', () => {
 });
 
 describe('ApprovalChannel.handleInteraction', () => {
+  it('rejects approval by a different group member, stale tokens and malformed decisions', async () => {
+    const sent: SentMessage[] = [];
+    const ch = new ApprovalChannel(createManager({ findBySessionId: () => makeRecord(sessionKey('group', 'group'), 'group') }), createSender(sent), createLogger());
+    const { handler } = installAndCapture(ch, sent);
+    const pending = handler(makeRequest(), () => Promise.resolve('unavailable'));
+    await sleep(5);
+    expect(ch.handleInteraction(makeEvent(JSON.stringify({ t: 'approval', d: 'allow' }), { group: 'group', user: 'intruder' }))).toBe(false);
+    expect(ch.handleInteraction(makeEvent(JSON.stringify({ t: 'approval', d: 'allow', q: 'stale-token' }), { group: 'group', user: 'peer-qq' }))).toBe(false);
+    expect(ch.handleInteraction(makeEvent(JSON.stringify({ t: 'approval', d: 'malformed' }), { group: 'group', user: 'peer-qq' }))).toBe(false);
+    expect(ch.handleInteraction(makeEvent(JSON.stringify({ t: 'approval', d: 'allow' }), { group: 'group', user: 'peer-qq' }))).toBe(true);
+    await expect(pending).resolves.toBe('allowed-once');
+  });
+  it('fails closed without an administrator authorization provider and cancels on unload', async () => {
+    const sent: SentMessage[] = [];
+    const manager = createManager({ findBySessionId: () => makeRecord(sessionKey('c2c', 'peer-qq')) });
+    const closed = new BaseApprovalChannel(manager, createSender(sent), createLogger());
+    const first = installAndCapture(closed, sent);
+    await expect(first.handler(makeRequest(), () => Promise.resolve('allowed-once'))).resolves.toBe('rejected'); expect(sent).toHaveLength(0);
+    const ch = new ApprovalChannel(manager, createSender(sent), createLogger());
+    const { handler } = installAndCapture(ch, sent); const pending = handler(makeRequest(), () => Promise.resolve('unavailable'));
+    await sleep(5); ch.uninstall(); await expect(pending).resolves.toBe('cancelled');
+  });
   it('settles deny as rejected and ignores unknown buttons', async () => {
     const sent: SentMessage[] = [];
     const ch = new ApprovalChannel(

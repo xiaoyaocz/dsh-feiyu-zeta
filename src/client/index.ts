@@ -1,5 +1,5 @@
 /**
- * im-qqbot 浏览器半边 —— QQ Bot 端内扫码绑定入口
+ * dsh-feiyu-zeta 浏览器半边 —— QQ 接入与陪伴功能入口
  *
  * 宿主插件在凭据缺失时注册 /qqbot/im-qqbot/bind 状态路由；本插件在
  * Web / Desktop 提供两个展示位：
@@ -17,8 +17,9 @@ import { createElement, type ReactNode } from 'react';
 import { BIND_STATE_PATH } from '../shared/bind-protocol.ts';
 import { BindPanelBody, QQ_BOT_LOGO_PATH, installPanelStyles } from './bind-page.ts';
 import { ConfigPanel } from './config-panel.ts';
+import { ZetaPanel } from './zeta-panel.ts';
 
-export const name = 'im-qqbot-client';
+export const name = 'dsh-feiyu-zeta-client';
 export const inject = ['slots', 'sidebarRight', 'sidebarRightTabs'];
 
 /** 侧栏 Tab 类型（ui-sidebar-right 契约的局部投影） */
@@ -26,7 +27,7 @@ const TAB_KIND = 'qqbot-bind';
 /** 席位注册 key（Tab 类型 id，席位按其分发；只需全局唯一，与包名解耦） */
 const TAB_ID = 'im-qqbot/bind';
 /** 本插件包名（插件详情页按其匹配来源包，只在对应详情页渲染操作按钮） */
-const PACKAGE_NAME = '@tencent-connect/dsh-qqbot';
+const PACKAGE_NAME = 'dsh-feiyu-zeta';
 /** 主面板 id（layout.selectPanel 导航目标；keyed main 席位按其分发） */
 const IM_MAIN_PANEL_ID = 'im-qqbot';
 
@@ -84,6 +85,7 @@ function QQBotSettingsSection(): ReactNode {
   return createElement('div', null,
     createElement(BindPanelBody),
     createElement(ConfigPanel),
+    createElement(ZetaPanel),
   );
 }
 
@@ -129,7 +131,7 @@ export function apply(ctx: Context): void {
   // 1. 设置页「QQ Bot」栏目（主展示位：注册即展示，无时序依赖）
   if (slots !== undefined) {
     disposers.push(    slots.inject('settings.section', () => slots.register(
-      { name: 'settings.section', id: 'qqbot', order: 7, label: 'QQ 机器人' },
+      { name: 'settings.section', id: 'qqbot', order: 7, label: PACKAGE_NAME },
       QQBotSettingsSection,
     )));
   }
@@ -139,12 +141,12 @@ export function apply(ctx: Context): void {
     disposers.push(tabs.register({
       id: TAB_ID,
       kind: TAB_KIND,
-      title: () => 'QQ 机器人绑定',
+      title: () => `${PACKAGE_NAME} · QQ 绑定`,
       guide: [{
         id: 'bind',
         order: 90,
-        title: () => 'QQ 机器人绑定',
-        description: () => '扫码或手动填写，绑定 QQ 机器人',
+        title: () => `${PACKAGE_NAME} · QQ 绑定`,
+        description: () => `为 ${PACKAGE_NAME} 扫码或手动绑定 QQ`,
         icon: BindGuideIcon,
       }],
     }));
@@ -185,7 +187,7 @@ export function apply(ctx: Context): void {
       const stopSidebar = pageSlots.inject('sidebar.panellist', () => pageSlots.register(
         {
           name: 'sidebar.panellist', id: IM_MAIN_PANEL_ID,
-          order: 10, label: 'QQ 机器人',
+          order: 10, label: PACKAGE_NAME,
         },
         QqBotSidebarIcon,
       ));
@@ -199,7 +201,7 @@ export function apply(ctx: Context): void {
 
   (ctx as unknown as { effect(fn: () => () => void, name?: string): void }).effect(() => () => {
     for (const dispose of disposers.reverse()) dispose();
-  }, 'im-qqbot-client.binding');
+  }, 'dsh-feiyu-zeta-client.binding');
 }
 
 /**
