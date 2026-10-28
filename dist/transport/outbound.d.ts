@@ -24,6 +24,13 @@ export interface OutboundHandlers {
      * 实时流式帧入口（注册到 ctx.on('agent/assistant-stream', ..., { global: true })）。
      */
     routeStreamFrame(agentId: string, delta: StreamDelta): void;
+    cancel(sessionId: string): void;
+    awaitText(sessionId: string, signal?: AbortSignal): Promise<void>;
+}
+export interface AutomaticReplyPolicy {
+    noteDelivered(record: SessionRecord, text: string): void;
+    hasReplyDelivered(record: SessionRecord): boolean;
+    hasDeliveredText(record: SessionRecord, text: string): boolean;
 }
 /** dsh Session 简化类型 */
 export interface SessionLike {
@@ -38,5 +45,5 @@ export interface SessionLike {
  * ctx.on('session/event') 与 ctx.on('agent/assistant-stream', ..., { global: true })。
  * toolsRegistry 用于工具结果的结构化展示；deliverer 用于轮末投递 present 声明的交付文件。
  */
-export declare function createOutboundHandler(manager: SessionManager, bot: QQBotSender, config: ImQQBotConfig, logger: Logger, toolsRegistry?: ToolsRegistryLike, deliverer?: DeliverablesDelivererLike, allowAutomatic?: (record: SessionRecord) => boolean): OutboundHandlers;
+export declare function createOutboundHandler(manager: SessionManager, bot: QQBotSender, config: ImQQBotConfig, logger: Logger, toolsRegistry?: ToolsRegistryLike, deliverer?: DeliverablesDelivererLike, allowAutomatic?: (record: SessionRecord) => boolean, replyPolicy?: AutomaticReplyPolicy): OutboundHandlers;
 //# sourceMappingURL=outbound.d.ts.map

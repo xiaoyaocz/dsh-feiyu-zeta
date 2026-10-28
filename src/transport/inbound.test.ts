@@ -13,7 +13,7 @@ function fixture() {
   const agent = { followup: vi.fn(), whenIdle: vi.fn().mockResolvedValue(undefined), cancel: vi.fn() };
   const record = { agent, sessionId: 'group-session', scope: 'group', peerId: 'group' };
   const manager = { getOrCreate: vi.fn().mockResolvedValue(record) } as unknown as SessionManager;
-  const zeta = { waitForMaintenance: vi.fn(), bindRecord: vi.fn(), noteAttachments: vi.fn(), beginRequest: vi.fn(), endRequest: vi.fn(), state: { consumeMigrationGroup: vi.fn() } } as unknown as ZetaRuntime;
+  const zeta = { waitForMaintenance: vi.fn(), bindRecord: vi.fn(), noteAttachments: vi.fn(), beginRequest: vi.fn().mockReturnValue('request-handle'), endRequest: vi.fn(), state: { consumeMigrationGroup: vi.fn() } } as unknown as ZetaRuntime;
   return { agent, manager, zeta, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }, config: { appId: 'bot' } as ImQQBotConfig };
 }
 describe('group batch identity and media preservation', () => {
@@ -53,8 +53,8 @@ describe('group batch identity and media preservation', () => {
     expect(bodies[1]).toContain('C:\\media\\reference.png');
     expect(bodies.join('\n').match(/成员当前发言/gu)).toHaveLength(1);
     expect(bodies.join('\n').match(/请修改配置/gu)).toHaveLength(1);
-    expect(f.zeta.beginRequest).toHaveBeenNthCalledWith(1, f.agent, [{ senderId: 'member', messageId: 'member-1', text: '成员当前发言' }], true);
-    expect(f.zeta.beginRequest).toHaveBeenNthCalledWith(2, f.agent, [{ senderId: 'owner', messageId: 'owner-2', text: '请修改配置' }], true);
+    expect(f.zeta.beginRequest).toHaveBeenNthCalledWith(1, f.agent, [{ senderId: 'member', messageId: 'member-1', text: '成员当前发言' }], true, expect.any(AbortSignal));
+    expect(f.zeta.beginRequest).toHaveBeenNthCalledWith(2, f.agent, [{ senderId: 'owner', messageId: 'owner-2', text: '请修改配置' }], true, expect.any(AbortSignal));
     expect(f.zeta.noteAttachments).toHaveBeenNthCalledWith(1, f.agent, ['C:\\media\\member.png']);
     expect(f.zeta.noteAttachments).toHaveBeenNthCalledWith(2, f.agent, ['C:\\media\\owner.png', 'C:\\media\\reference.png']);
     expect(f.zeta.endRequest).toHaveBeenCalledTimes(2);
@@ -69,19 +69,37 @@ describe('group batch identity and media preservation', () => {
     expect(text).toContain('[owner (owner)]'); expect(text).toContain('[bob (bob)]');
     expect(text).toContain('消息 1'); expect(text).toContain('消息 2'); expect(text).toContain('C:\\media\\image.gif');
     expect(text).toContain('所引用的内容'); expect(text.match(/修改配置/gu)).toHaveLength(1);
-    expect(f.zeta.beginRequest).toHaveBeenCalledWith(f.agent, [{ senderId: 'owner', messageId: '1', text: '修改配置' }, { senderId: 'bob', messageId: '2', text: '' }], true);
-    expect(f.zeta.noteAttachments).toHaveBeenCalledWith(f.agent, ['C:\\media\\image.gif']); expect(f.zeta.endRequest).toHaveBeenCalledWith(f.agent);
+    expect(f.zeta.beginRequest).toHaveBeenCalledWith(f.agent, [{ senderId: 'owner', messageId: '1', text: '修改配置' }, { senderId: 'bob', messageId: '2', text: '' }], true, expect.any(AbortSignal));
+    expect(f.zeta.noteAttachments).toHaveBeenCalledWith(f.agent, ['C:\\media\\image.gif']); expect(f.zeta.endRequest).toHaveBeenCalledWith(f.agent, 'request-handle');
   });
   it('propagates cancellation and always clears request authority when idle rejects', async () => {
     const f = fixture(); const controller = new AbortController();
     const a = context('owner', '1', '更改插件'); Object.assign(a, { signal: controller.signal });
     f.agent.whenIdle.mockImplementation(async () => { controller.abort(); throw new Error('cancelled'); });
     await handleInbound(a, f.manager, f.config, f.logger, f.zeta);
-    expect(f.agent.cancel).toHaveBeenCalled(); expect(f.zeta.endRequest).toHaveBeenCalledWith(f.agent);
+    expect(f.agent.cancel).toHaveBeenCalled(); expect(f.zeta.endRequest).toHaveBeenCalledWith(f.agent, 'request-handle');
   });
   it('sends no group fallback message when session creation fails', async () => {
     const f = fixture(); const a = context('member', '1', '闲聊'); vi.mocked(f.manager.getOrCreate).mockRejectedValue(new Error('offline'));
     await handleInbound(a, f.manager, f.config, f.logger, f.zeta);
     expect(a.bot.sendMarkdown).not.toHaveBeenCalled();
+  });
+  it('does not start a late followup after cancellation during asynchronous setup', async () => {
+    const f = fixture(), controller = new AbortController();
+    let ready!: () => void;
+    vi.mocked(f.zeta.bindRecord).mockImplementation(() => new Promise<void>(resolve => { ready = resolve; }));
+    const a = context('member', '1', '请做很长的任务'); Object.assign(a, { signal: controller.signal });
+    const run = handleInbound(a, f.manager, f.config, f.logger, f.zeta);
+    await vi.waitFor(() => expect(f.zeta.bindRecord).toHaveBeenCalled()); controller.abort(); ready(); await run;
+    expect(f.agent.followup).not.toHaveBeenCalled(); expect(f.zeta.beginRequest).not.toHaveBeenCalled(); expect(a.bot.sendMarkdown).not.toHaveBeenCalled();
+  });
+  it('keeps the request handle live until final QQ delivery settles', async () => {
+    const f = fixture(), a = context('member', '1', '长任务'); let delivered!: () => void;
+    const waiting = vi.fn(() => new Promise<void>(resolve => { delivered = resolve; }));
+    f.manager.waitForReplies = waiting;
+    const run = handleInbound(a, f.manager, f.config, f.logger, f.zeta);
+    await vi.waitFor(() => expect(waiting).toHaveBeenCalled()); expect(f.zeta.endRequest).not.toHaveBeenCalled();
+    const signal = vi.mocked(f.zeta.beginRequest).mock.calls[0]![3]!; expect(signal.aborted).toBe(false);
+    delivered(); await run; expect(f.zeta.endRequest).toHaveBeenCalledWith(f.agent, 'request-handle'); expect(signal.aborted).toBe(true);
   });
 });

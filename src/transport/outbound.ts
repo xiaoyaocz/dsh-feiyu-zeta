@@ -40,6 +40,14 @@ export interface OutboundHandlers {
    * 实时流式帧入口（注册到 ctx.on('agent/assistant-stream', ..., { global: true })）。
    */
   routeStreamFrame(agentId: string, delta: StreamDelta): void;
+  cancel(sessionId: string): void;
+  awaitText(sessionId: string, signal?: AbortSignal): Promise<void>;
+}
+
+export interface AutomaticReplyPolicy {
+  noteDelivered(record: SessionRecord, text: string): void;
+  hasReplyDelivered(record: SessionRecord): boolean;
+  hasDeliveredText(record: SessionRecord, text: string): boolean;
 }
 
 /** dsh Session 简化类型 */
@@ -80,6 +88,7 @@ class OutboundRouter {
   private readonly toolsRegistry: ToolsRegistryLike | undefined;
   private readonly deliverer: DeliverablesDelivererLike | undefined;
   private readonly allowAutomatic: (record: SessionRecord) => boolean;
+  private readonly replyPolicy?: AutomaticReplyPolicy;
 
   public constructor(
     manager: SessionManager,
@@ -89,6 +98,7 @@ class OutboundRouter {
     toolsRegistry: ToolsRegistryLike | undefined,
     deliverer?: DeliverablesDelivererLike,
     allowAutomatic: (record: SessionRecord) => boolean = () => true,
+    replyPolicy?: AutomaticReplyPolicy,
   ) {
     this.manager = manager;
     this.bot = bot;
@@ -97,6 +107,32 @@ class OutboundRouter {
     this.toolsRegistry = toolsRegistry;
     this.deliverer = deliverer;
     this.allowAutomatic = allowAutomatic;
+    this.replyPolicy = replyPolicy;
+  }
+
+  public cancel(sessionId: string): void {
+    this.buffers.get(sessionId)?.cancel(); this.buffers.delete(sessionId);
+    this.streamAttempts.delete(sessionId); this.presentedFiles.delete(sessionId); this.presentedCalls.delete(sessionId);
+    this.pendingText.delete(sessionId);
+    for (const key of this.toolCalls.keys()) if (key.startsWith(`${sessionId}:`)) this.toolCalls.delete(key);
+  }
+
+  public async awaitText(sessionId: string, signal?: AbortSignal): Promise<void> {
+    let previous: Promise<void> | undefined;
+    for (;;) {
+      signal?.throwIfAborted();
+      const pending = this.pendingText.get(sessionId);
+      if (!pending || pending === previous) return;
+      previous = pending;
+      if (!signal) { await pending; continue; }
+      let abort!: () => void;
+      try {
+        await Promise.race([pending, new Promise<never>((_resolve, reject) => {
+          abort = () => reject(signal.reason); signal.addEventListener('abort', abort, { once: true });
+          if (signal.aborted) abort();
+        })]);
+      } finally { signal.removeEventListener('abort', abort); }
+    }
   }
 
   /** 事件分发入口 */
@@ -106,6 +142,7 @@ class OutboundRouter {
 
     const record = this.manager.findBySessionId(session.header.id);
     if (record === undefined) return;
+    if (record.requestSignal?.aborted || (event.type === 'turn/end' && event.reason.kind === 'interrupted')) { this.cancel(session.header.id); return; }
     if (!this.allowAutomatic(record)) return;
 
     switch (event.type) {
@@ -116,10 +153,10 @@ class OutboundRouter {
         this.onMessage(session.header.id, record, event);
         break;
       case 'tool/call':
-        this.onToolCall(event);
+        this.onToolCall(session.header.id, event);
         break;
       case 'tool/result':
-        this.onToolResult(record, event);
+        this.onToolResult(session.header.id, record, event);
         break;
       case 'deliverables/presented':
         this.onPresented(session.header.id, event);
@@ -146,6 +183,10 @@ class OutboundRouter {
    * attempt 的尾巴混进新内容。
    */
   public routeStreamFrame(agentId: string, delta: StreamDelta): void {
+    const record = this.manager.findBySessionId(agentId);
+    if (record === undefined) return;
+    if (record.requestSignal?.aborted) { this.cancel(agentId); return; }
+    if (!this.allowAutomatic(record)) return;
     if (delta.kind === 'attempt-start') {
       this.streamAttempts.set(agentId, delta.attemptId);
       this.buffers.get(agentId)?.reset();
@@ -160,9 +201,6 @@ class OutboundRouter {
       return;
     }
 
-    const record = this.manager.findBySessionId(agentId);
-    if (record === undefined) return;
-    if (!this.allowAutomatic(record)) return;
     this.appendChunk(agentId, record, delta.text);
   }
 
@@ -170,7 +208,10 @@ class OutboundRouter {
   private appendChunk(sessionId: string, record: SessionRecord, text: string): void {
     let buffer = this.buffers.get(sessionId);
     if (buffer === undefined) {
-      buffer = new OutboundBuffer(record, this.bot, this.config.textChunkLimit, this.logger, this.shouldStream(record));
+      const snapshot = { ...record, replyTarget: { ...record.replyTarget } };
+      buffer = new OutboundBuffer(snapshot, this.bot, this.config.textChunkLimit, this.logger, this.shouldStream(record), {
+        signal: snapshot.requestSignal, onDelivered: text => this.replyPolicy?.noteDelivered(snapshot, text),
+      });
       this.buffers.set(sessionId, buffer);
     }
     buffer.append(text);
@@ -180,46 +221,56 @@ class OutboundRouter {
   private shouldStream(record: SessionRecord): boolean {
     return this.config.streaming
       && record.replyTarget.scope === 'c2c'
-      && !!record.replyTarget.msgId;
+      && !!record.replyTarget.msgId
+      // Subsequent stages remain visible at message commit, when their full
+      // text can be compared with an explicit tool reply before sending.
+      && !this.replyPolicy?.hasReplyDelivered(record);
   }
 
   /** 完整 assistant 消息：有流式 buffer 则 flush，否则直接发送文本块 */
   private onMessage(sessionId: string, record: SessionRecord, event: MessageEvent): void {
+    const fullText = event.content.filter(block => block.type === 'text' && block.text).map(block => block.text).join('\n');
     const buffer = this.buffers.get(sessionId);
+    if (fullText.trim() && this.replyPolicy?.hasDeliveredText(record, fullText)) {
+      buffer?.cancel(); this.buffers.delete(sessionId); return;
+    }
     if (buffer !== undefined && buffer.text.trim()) {
-      this.trackText(sessionId, buffer.flush());
+      this.trackText(sessionId, () => buffer.flush());
       this.buffers.delete(sessionId);
       return;
     }
 
-    const textParts: string[] = [];
-    for (const block of event.content) {
-      if (block.type === 'text' && block.text) textParts.push(block.text);
-    }
-    const fullText = textParts.join('\n');
     if (!fullText.trim()) return;
 
-    this.trackText(sessionId, this.send(record, fullText, 'sendMarkdown'));
+    const snapshot = { ...record, replyTarget: { ...record.replyTarget } };
+    this.trackText(sessionId, () => this.replyPolicy?.hasDeliveredText(snapshot, fullText) ? Promise.resolve() : this.send(snapshot, fullText, 'sendMarkdown'));
     this.buffers.delete(sessionId);
   }
 
   /** 记录每会话最后一笔在途文本任务（自身吞错：错误已由 send/flush 内部记录） */
-  private trackText(sessionId: string, task: Promise<void>): void {
-    this.pendingText.set(sessionId, task.catch(() => {}));
+  private trackText(sessionId: string, task: () => Promise<void>): Promise<void> {
+    const pending = (this.pendingText.get(sessionId) ?? Promise.resolve()).then(task).catch(error => {
+      this.logger.error(`im-qqbot: reply delivery failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    this.pendingText.set(sessionId, pending);
+    return pending;
   }
 
   /** 工具调用：仅记录，不发送（避免刷屏，等待结果） */
-  private onToolCall(event: ToolCallEvent): void {
-    this.toolCalls.set(event.callId, { name: event.name, args: event.arguments });
+  private onToolCall(sessionId: string, event: ToolCallEvent): void {
+    this.toolCalls.set(`${sessionId}:${event.callId}`, { name: event.name, args: event.arguments });
   }
 
-  /** 工具结果：错误始终发送，成功结果按开关 */
-  private onToolResult(record: SessionRecord, event: ToolResultEvent): void {
-    const call = this.toolCalls.get(event.callId);
-    this.toolCalls.delete(event.callId);
+  /** Zeta models explain tool outcomes themselves; diagnostics remain opt-in. */
+  private onToolResult(sessionId: string, record: SessionRecord, event: ToolResultEvent): void {
+    const call = this.toolCalls.get(`${sessionId}:${event.callId}`);
+    this.toolCalls.delete(`${sessionId}:${event.callId}`);
     if (call === undefined) return;
 
-    if (event.error === undefined && !this.config.showToolResults) return;
+    if (!this.config.showToolResults && (event.error === undefined || this.replyPolicy)) {
+      if (event.error) this.logger.warn(`im-qqbot: tool result retained for AI: ${call.name} (${event.error.name}: ${event.error.code})`);
+      return;
+    }
 
     const text = formatToolResult(
       call.name,
@@ -255,46 +306,46 @@ class OutboundRouter {
   private onTurnEnd(sessionId: string, record: SessionRecord, event: TurnEndEvent): void {
     const buffer = this.buffers.get(sessionId);
     // 文本 flush 可等待，保证回复先于交付文件到达用户
-    let flushTask: Promise<void> = Promise.resolve();
-    if (buffer !== undefined) {
-      if (buffer.text.trim()) {
-        flushTask = buffer.flush();
-      } else {
-        buffer.cancel();
-      }
-      this.buffers.delete(sessionId);
-    }
+    this.buffers.delete(sessionId);
     this.streamAttempts.delete(sessionId);
     const files = this.presentedFiles.get(sessionId) ?? [];
     this.presentedFiles.delete(sessionId);
     this.presentedCalls.delete(sessionId);
     // assistant/message 已在轮内先行发送的文本可能仍在途：与 turn/end 自身的 flush 一起等待
-    const pending = this.pendingText.get(sessionId) ?? Promise.resolve();
-    this.pendingText.delete(sessionId);
-
     const failure = extractTurnError(event.reason);
-    void (async () => {
-      await Promise.all([flushTask, pending]);
+    const snapshot = { ...record, replyTarget: { ...record.replyTarget } };
+    const task = this.trackText(sessionId, async () => {
+      if (snapshot.requestSignal?.aborted) { buffer?.cancel(); return; }
+      if (buffer?.text.trim()) await buffer.flush(); else buffer?.cancel();
+      if (snapshot.requestSignal?.aborted) return;
       if (failure !== undefined && !SILENT_TURN_ERROR_CODES.has(failure.code)) {
-        await this.send(record, `⚠️ 本轮异常结束\n\`${failure.code}\`: ${failure.message}`, 'sendTurnEndError');
+        await this.send(snapshot, `⚠️ 本轮异常结束\n\`${failure.code}\`: ${failure.message}`, 'sendTurnEndError');
       }
-      if (files.length > 0 && this.deliverer !== undefined) {
-        await this.deliverer.deliver(record, files);
+      if (!snapshot.requestSignal?.aborted && files.length > 0 && this.deliverer !== undefined) {
+        await this.deliverer.deliver(snapshot, files);
       }
       this.logger.debug(`im-qqbot: turn/end sessionId=${sessionId}`);
-    })();
+    });
+    void task.finally(() => { if (this.pendingText.get(sessionId) === task) this.pendingText.delete(sessionId); });
   }
 
   /** 统一发送：切分 + 逐 chunk 发送 + 错误记录 */
   private async send(record: SessionRecord, text: string, tag: string): Promise<void> {
+    record = { ...record, replyTarget: { ...record.replyTarget } };
     const chunks = chunkMarkdownText(text, this.config.textChunkLimit);
+    let complete = true;
     for (const chunk of chunks) {
+      if (record.requestSignal?.aborted) return;
       try {
         await this.bot.sendMarkdown(record.replyTarget, chunk);
+        if (record.requestSignal?.aborted) return;
+        if (tag === 'sendMarkdown') this.replyPolicy?.noteDelivered(record, chunk);
       } catch (err) {
+        complete = false;
         this.logger.error(`im-qqbot: ${tag} failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    if (complete && tag === 'sendMarkdown') this.replyPolicy?.noteDelivered(record, text);
   }
 }
 
@@ -313,10 +364,13 @@ export function createOutboundHandler(
   toolsRegistry?: ToolsRegistryLike,
   deliverer?: DeliverablesDelivererLike,
   allowAutomatic?: (record: SessionRecord) => boolean,
+  replyPolicy?: AutomaticReplyPolicy,
 ): OutboundHandlers {
-  const router = new OutboundRouter(manager, bot, config, logger, toolsRegistry, deliverer, allowAutomatic);
+  const router = new OutboundRouter(manager, bot, config, logger, toolsRegistry, deliverer, allowAutomatic, replyPolicy);
   return {
     routeSessionEvent: (session, event) => router.route(session, event),
     routeStreamFrame: (agentId, delta) => router.routeStreamFrame(agentId, delta),
+    cancel: sessionId => router.cancel(sessionId),
+    awaitText: (sessionId, signal) => router.awaitText(sessionId, signal),
   };
 }

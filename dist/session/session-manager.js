@@ -36,6 +36,7 @@ export class SessionManager {
     questionChannel;
     /** 由 bootstrap 注入的审批通道（approval/request → QQ），会话回收时清理其待批审批 */
     approvalChannel;
+    waitForReplies;
     constructor(ctx, agents, config, logger) {
         this.ctx = ctx;
         this.agents = agents;
@@ -69,11 +70,12 @@ export class SessionManager {
             if (!record)
                 return assembled;
             const prompt = record.scope === 'group' ? this.config.groupPrompt : this.config.directPrompt;
-            if (!prompt)
-                return assembled;
+            const responsiveness = record.scope === 'group'
+                ? '需要较长时间的任务，先判断是否参与群聊；只有决定reply后，才用zeta_send_message自然说明你准备做什么，再执行任务。执行中有实际阶段变化且值得告知时，可主动用发送工具简短说明进度。不要发送固定接收模板，不要虚构进展或重复已发送的内容；skip保持沉默。'
+                : '需要较长时间的搜索、浏览、生图、语音或网页制作任务，先用你自己的话简短说明准备做什么，再调用工具。普通assistant正文会直接发到当前QQ，可作为开场确认；也可使用zeta_send_message，但同一段话只发送一次。执行中有实际阶段变化且值得告知时，可自然说明进度；不要只在所有工具完成后才回应，也不要虚构进展、照抄固定接收模板或重复已发内容。';
             return {
                 ...assembled,
-                sections: [...(assembled.sections ?? []), { name: 'qqbot:scope-prompt', order: 90, text: prompt }],
+                sections: [...(assembled.sections ?? []), { name: 'qqbot:responsiveness', order: 85, text: responsiveness }, ...(prompt ? [{ name: 'qqbot:scope-prompt', order: 90, text: prompt }] : [])],
             };
         };
         this.ctx.on('system-prompt/assemble', assemble);
@@ -385,6 +387,16 @@ export class SessionManager {
                 return record;
         }
         return undefined;
+    }
+    /** Urgent stop bypasses the inbox and also releases pending human prompts. */
+    interrupt(scope, peerId) {
+        const record = this.getSessionRecord(scope, peerId);
+        if (!record)
+            return;
+        record.abortRequest?.();
+        record.agent.cancel({ kind: 'user' });
+        this.questionChannel?.cancelPending(record.sessionKey);
+        this.approvalChannel?.cancelPending(record.sessionKey);
     }
     async remove(scope, peerId) {
         const key = this.sessionKey(scope, peerId);

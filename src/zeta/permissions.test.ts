@@ -35,15 +35,28 @@ describe('trusted administrator request authorization', () => {
       expect(toolDenial(name, undefined, 'reply')).toBeUndefined();
     }
   });
-  it('grants explicit native exploration to life without administrator or QQ privileges', () => {
+  it('grants the three exact native exploration tools to QQ and life without administrator privileges', () => {
     const admin = requestAuthority('app', [source('owner', '管理员请求')], ['owner']);
+    const ordinary = requestAuthority('app', [source('member', '请看图和搜索网页')], ['owner']);
     for (const name of ['read_image', 'web_search', 'web_fetch']) {
-      expect(toolDenial(name, undefined, undefined, 'life')).toBeUndefined();
-      expect(toolDenial(name, undefined)).toBeDefined();
+      for (const actor of ['qq', 'life'] as const) {
+        expect(toolDenial(name, undefined, undefined, actor)).toBeUndefined();
+        expect(toolDenial(name, ordinary, undefined, actor)).toBeUndefined();
+      }
+      expect(toolDenial(name, undefined)).toBeUndefined();
     }
-    for (const name of ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'working_directory', 'run_code', 'delegate', 'zeta_settings_get', 'zeta_settings_update', 'plugin_update', 'credentials_set', 'new_plugin_tool']) {
+    for (const name of ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'working_directory', 'run_code', 'delegate', 'zeta_settings_get', 'zeta_settings_update', 'plugin_update', 'credentials_set', 'new_plugin_tool', 'web_search_config', 'web_fetch_custom', 'read_image_unrestricted']) {
+      expect(toolDenial(name, ordinary)).toBeDefined();
       expect(toolDenial(name, undefined, undefined, 'life')).toBeDefined();
       expect(toolDenial(name, admin, undefined, 'life')).toBeDefined();
+    }
+  });
+  it('allows silent groups to explore while keeping all QQ sending tools blocked', () => {
+    const ordinary = requestAuthority('app', [source('member', '不用回复，但可以查资料')], ['owner']);
+    for (const decision of ['undecided', 'skip'] as const) {
+      for (const name of ['read_image', 'web_search', 'web_fetch']) expect(toolDenial(name, ordinary, decision)).toBeUndefined();
+      for (const name of ['zeta_send_message', 'send_meme', 'qqbot_send_file', 'ask_user_question', 'zeta_speech_generate']) expect(toolDenial(name, ordinary, decision)).toBeDefined();
+      expect(toolDenial('bash', ordinary, decision)).toBeDefined();
     }
   });
 });

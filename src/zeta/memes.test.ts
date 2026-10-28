@@ -104,22 +104,23 @@ describe('integrated dsh-meme', () => {
     await expect(module.learn(f.a, { filePath: input, caption: '取消' }, abort.signal)).rejects.toThrow();
   });
 
-  it('does not report sent until the real sender settles, and requires an explicit autonomous target', async () => {
+  it('does not report sent until the real sender settles, and requires an explicit target for every actor', async () => {
     const f = await fixture();
     let release: ((value: Record<string, unknown>) => void) | undefined;
     f.host.sendFile = async () => new Promise((resolve) => { release = resolve; });
     const module = new MemeModule(f.host);
     const id = (await module.list(f.a)).items[0]!.id;
     let settled = false;
-    const pending = module.send(f.a, id, undefined, new AbortController().signal).then((value) => { settled = true; return value; });
+    const pending = module.send(f.a, id, 'c2c:alice', new AbortController().signal).then((value) => { settled = true; return value; });
     for (let i = 0; i < 20 && !release; i++) await new Promise((resolve) => setTimeout(resolve, 5));
     expect(release).toBeTypeOf('function');
     expect(settled).toBe(false);
     release!({ messageId: 'accepted' });
     expect((await pending).receipt.messageId).toBe('accepted');
-    await expect(module.send(f.life, id, undefined, new AbortController().signal)).rejects.toThrow('指定联系目标');
+    await expect(module.send(f.life, id, undefined, new AbortController().signal)).rejects.toThrow('指定');
+    await expect(module.send(f.a, id, undefined, new AbortController().signal)).rejects.toThrow('指定');
     f.host.sendFile = async () => { throw new Error('QQ refused'); };
-    await expect(module.send(f.a, id, undefined, new AbortController().signal)).rejects.toThrow('QQ refused');
+    await expect(module.send(f.a, id, 'c2c:alice', new AbortController().signal)).rejects.toThrow('QQ refused');
   });
 
   it('protects the read-only builtin pack and rejects an index path escaping its own collection', async () => {

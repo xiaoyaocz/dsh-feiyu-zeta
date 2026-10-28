@@ -29,6 +29,7 @@ export function isPathAllowed(filePath, config, cwd) {
  * 平台发送失败返回 failed。文件名透传给通用文件通道。
  */
 export async function sendMediaFile(bot, target, filePath, opts = {}) {
+    opts.signal?.throwIfAborted();
     let size;
     try {
         const info = await stat(filePath);
@@ -42,6 +43,7 @@ export async function sendMediaFile(bot, target, filePath, opts = {}) {
     const fileName = opts.fileName ?? basename(filePath);
     const ext = extname(filePath).toLowerCase();
     const source = { localPath: filePath };
+    opts.signal?.throwIfAborted();
     try {
         const result = ext === '.gif' || IMAGE_EXTS.has(ext)
             ? await bot.sendImage(target, source)

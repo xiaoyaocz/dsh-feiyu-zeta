@@ -44,6 +44,9 @@ export interface ModuleHost {
     readonly ctx: Context;
     readonly dataDir: string;
     requireWritable?(): void;
+    /** Stable trusted input batch/run identity, independent of model tool call IDs. */
+    requestKeyFor?(agent: unknown): string | undefined;
+    validateSendTarget?(agent: unknown, target: string | undefined, kind: 'text' | 'speech' | 'memes' | 'file'): void;
     bindingFor(agent: unknown): ConversationBinding | undefined;
     /** Trusted actors share one library; optional for existing module adapters. */
     spaceFor?(agent: unknown): string;

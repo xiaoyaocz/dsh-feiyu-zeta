@@ -8,6 +8,7 @@ import type { QQBotSender } from './outbound-buffer.ts';
 import type { SessionRecord } from '../session/index.ts';
 import type { ImQQBotConfig } from '../config.ts';
 import type { Logger } from '../types.ts';
+import type { ZetaRuntime } from '../zeta/runtime.ts';
 
 const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -37,6 +38,27 @@ function createRecord(): SessionRecord {
 }
 
 describe('DeliverablesDeliverer', () => {
+  it('passes an explicit origin target and the request signal to the shared delivery ledger', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-qqbot-dlv-')), path = join(dir, 'voice.wav'); await writeFile(path, 'audio');
+    const record = createRecord(), controller = new AbortController(); record.requestSignal = controller.signal;
+    const sendFile = vi.fn(async () => ({ size: 5, messageId: 'receipt' }));
+    const deliverer = new DeliverablesDeliverer(createSender(), createMediaBot(), createConfig(dir), logger, { sendFile, hasDeliveredFile: vi.fn(async () => false) } as unknown as ZetaRuntime);
+    await deliverer.deliver(record, [{ path }]);
+    expect(sendFile).toHaveBeenCalledExactlyOnceWith(record.agent, path, 'c2c:u', controller.signal);
+  });
+  it('does not send subsequent files or a failure notice after cancellation', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-qqbot-dlv-')), controller = new AbortController(), record = createRecord(); record.requestSignal = controller.signal;
+    const first = join(dir, 'a.wav'), second = join(dir, 'b.wav'); await writeFile(first, 'a'); await writeFile(second, 'b');
+    const sender = createSender(), sendFile = vi.fn(async () => { controller.abort(); throw new Error('stopped'); });
+    const deliverer = new DeliverablesDeliverer(sender, createMediaBot(), createConfig(dir), logger, { sendFile, hasDeliveredFile: vi.fn(async () => false) } as unknown as ZetaRuntime);
+    await deliverer.deliver(record, [{ path: first }, { path: second }]); expect(sendFile).toHaveBeenCalledTimes(1); expect(sender.sendMarkdown).not.toHaveBeenCalled();
+  });
+  it('does not automatically copy an explicitly delivered group file back to the private origin', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-qqbot-dlv-')), path = join(dir, 'already-in-group.wav'); await writeFile(path, 'audio');
+    const sender = createSender(), sendFile = vi.fn(), hasDeliveredFile = vi.fn(async () => true), record = createRecord();
+    const deliverer = new DeliverablesDeliverer(sender, createMediaBot(), createConfig(dir), logger, { sendFile, hasDeliveredFile } as unknown as ZetaRuntime);
+    await deliverer.deliver(record, [{ path }]); expect(hasDeliveredFile).toHaveBeenCalledWith(record.agent, path); expect(sendFile).not.toHaveBeenCalled(); expect(sender.sendMarkdown).not.toHaveBeenCalled();
+  });
   it('存在的文件按扩展名分发发送', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'dsh-qqbot-dlv-'));
     const png = join(dir, 'a.png');

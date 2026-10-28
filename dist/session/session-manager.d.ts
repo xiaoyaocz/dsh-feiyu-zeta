@@ -17,6 +17,7 @@ export declare class SessionManager {
     questionChannel?: QuestionChannel;
     /** 由 bootstrap 注入的审批通道（approval/request → QQ），会话回收时清理其待批审批 */
     approvalChannel?: ApprovalChannel;
+    waitForReplies?: (sessionId: string, signal?: AbortSignal) => Promise<void>;
     constructor(ctx: Context, agents: DshAgentRegistry, config: ImQQBotConfig, logger: Logger);
     /**
      * 通过 system-prompt/assemble waterfall 注入群聊/私聊额外 system prompt。
@@ -79,6 +80,8 @@ export declare class SessionManager {
     getOrCreate(scope: ChatScope, peerId: string, senderId: string, replyTarget: ReplyTarget): Promise<SessionRecord>;
     findBySessionId(sessionId: string): SessionRecord | undefined;
     findByAgent(agent: DshAgent): SessionRecord | undefined;
+    /** Urgent stop bypasses the inbox and also releases pending human prompts. */
+    interrupt(scope: ChatScope, peerId: string): void;
     remove(scope: ChatScope, peerId: string): Promise<void>;
     /**
      * 原地压缩当前会话历史（保留 sessionId，用摘要替换旧历史）。

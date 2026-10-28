@@ -211,7 +211,8 @@ export class MemeModule {
 
   async send(agent: unknown, id: string, target: string | undefined, signal: AbortSignal): Promise<{ item: MemeItem; sent: true; receipt: Record<string, unknown> }> {
     signal.throwIfAborted();
-    if (this.host.isLifeAgent(agent) && !target?.trim()) throw new Error('自主发表情必须指定联系目标。');
+    if (!target?.trim()) throw new Error('发表情必须明确指定会话目录中的target，不会默认发到当前私聊。');
+    this.host.validateSendTarget?.(agent, target, 'memes');
     const item = await this.locate(agent, id);
     const file = await this.fileFor(agent, id);
     signal.throwIfAborted();
@@ -428,8 +429,8 @@ export function registerMemeTools(host: ModuleHost, options: MemeModuleOptions =
       async execute(args: ToolArgs, exec: ModuleExecution) { exec.signal.throwIfAborted(); return execute(args, exec); },
     });
   };
-  register('send_meme', '从内置大肥鱼图库及全对话共享收藏搜索表情。先 search 取得 id，确认描述后用 send 指定 id 发送。成功发送后不要重复输出图片路径或 [表情:] 标记；自主会话必须指定 target。',
-    toolParameters({ ...listFields, action: { type: 'string', enum: ['search', 'send'] }, id: string('搜索返回的表情 id。'), target: string('省略时回复当前QQ会话；跨会话使用zeta_conversation_list返回的target。自主联系须指定已允许的c2c:openid或group:group_openid。') }),
+  register('send_meme', '从内置大肥鱼图库及全对话共享收藏搜索表情。先 search 取得 id，确认描述后用 send 指定 id 和 target 发送。成功发送后不要重复输出图片路径或 [表情:] 标记；任何发送都必须指定 target。',
+    toolParameters({ ...listFields, action: { type: 'string', enum: ['search', 'send'] }, id: string('搜索返回的表情 id。'), target: string('发送时必填。使用zeta_conversation_list返回的真实target，不能省略或猜测。自主联系仍须选择已允许的目标。') }),
     async (args, exec) => {
       const action = args.action ?? 'search';
       if (action === 'send') {

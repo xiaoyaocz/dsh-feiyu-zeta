@@ -56,8 +56,9 @@ export async function sendMediaFile(
   bot: MediaSenderLike,
   target: ReplyTarget,
   filePath: string,
-  opts: { fileName?: string } = {},
+  opts: { fileName?: string; signal?: AbortSignal } = {},
 ): Promise<SendMediaResult> {
+  opts.signal?.throwIfAborted();
   let size: number;
   try {
     const info = await stat(filePath);
@@ -70,6 +71,7 @@ export async function sendMediaFile(
   const fileName = opts.fileName ?? basename(filePath);
   const ext = extname(filePath).toLowerCase();
   const source = { localPath: filePath };
+  opts.signal?.throwIfAborted();
 
   try {
     const result = ext === '.gif' || IMAGE_EXTS.has(ext)

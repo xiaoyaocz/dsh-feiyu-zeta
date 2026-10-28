@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createOutboundHandler } from './outbound.ts';
+import { createOutboundHandler, type AutomaticReplyPolicy } from './outbound.ts';
 import type { QQBotSender, StreamSessionLike } from './outbound-buffer.ts';
 import type { SessionManager, SessionRecord } from '../session/index.ts';
 import type { ImQQBotConfig } from '../config.ts';
@@ -10,7 +10,7 @@ function createLogger(): Logger {
 }
 
 function createSession(): StreamSessionLike {
-  return { update: vi.fn().mockResolvedValue(undefined), complete: vi.fn().mockResolvedValue(undefined) };
+  return { update: vi.fn().mockResolvedValue(undefined), complete: vi.fn().mockResolvedValue({ id: 'stream1' }), cancel: vi.fn() };
 }
 
 function createBot(session: StreamSessionLike): QQBotSender {
@@ -50,6 +50,7 @@ function setup(opts?: {
   config?: ImQQBotConfig;
   deliverer?: { deliver: ReturnType<typeof vi.fn> };
   allowAutomatic?: (record: SessionRecord) => boolean;
+  replyPolicy?: AutomaticReplyPolicy;
 }) {
   const session = createSession();
   const bot = createBot(session);
@@ -58,13 +59,90 @@ function setup(opts?: {
     findBySessionId: vi.fn((id: string) => (id === 'sess-qq' ? record : undefined)),
   } as unknown as SessionManager;
   const outbound = createOutboundHandler(
-    manager, bot, opts?.config ?? createConfig(), createLogger(), undefined, opts?.deliverer, opts?.allowAutomatic,
+    manager, bot, opts?.config ?? createConfig(), createLogger(), undefined, opts?.deliverer, opts?.allowAutomatic, opts?.replyPolicy,
   );
   return { outbound, bot, session };
 }
 
 const delta = (attemptId: string, text: string) => ({ kind: 'text-delta' as const, attemptId, text });
 const start = (attemptId: string) => ({ kind: 'attempt-start' as const, attemptId });
+
+describe('AI-written acknowledgement and progress delivery', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  function policy() {
+    const text = new Set<string>();
+    const replyPolicy: AutomaticReplyPolicy = { noteDelivered: vi.fn((_record, value) => { text.add(value.trim()); }),
+      hasReplyDelivered: () => text.size > 0, hasDeliveredText: (_record, value) => text.has(value.trim()) };
+    return { text, replyPolicy };
+  }
+  it('waits for the actual preamble receipt before acknowledging it to a long tool', async () => {
+    const { replyPolicy } = policy(), { outbound, bot } = setup({ config: createConfig({ streaming: false }), replyPolicy });
+    let receipt!: () => void; vi.mocked(bot.sendMarkdown).mockImplementation(() => new Promise<void>(resolve => { receipt = resolve; }));
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '我先整理资料，再做这个页面。' }, { type: 'tool-call', name: 'zeta_deploy_page' }] } } });
+    let ready = false; const gate = outbound.awaitText('sess-qq').then(() => { ready = true; });
+    await Promise.resolve(); expect(bot.sendMarkdown).toHaveBeenCalledWith(c2cTarget, '我先整理资料，再做这个页面。'); expect(ready).toBe(false); expect(replyPolicy.hasReplyDelivered({} as SessionRecord)).toBe(false);
+    receipt(); await gate; expect(ready).toBe(true); expect(replyPolicy.hasReplyDelivered({} as SessionRecord)).toBe(true);
+  });
+  it('keeps the acknowledgement gate closed when only a prior attempt obtained a stream receipt', async () => {
+    const { replyPolicy, text } = policy(), { outbound, bot, session } = setup({ replyPolicy });
+    vi.mocked(session.update).mockResolvedValueOnce({ id: 'old-attempt' }).mockRejectedValue(new Error('new attempt unknown'));
+    vi.mocked(session.complete).mockRejectedValue(new Error('completion unknown'));
+    outbound.routeStreamFrame('sess-qq', start('old')); outbound.routeStreamFrame('sess-qq', delta('old', 'old preamble'));
+    await vi.advanceTimersByTimeAsync(200);
+    outbound.routeStreamFrame('sess-qq', start('new')); outbound.routeStreamFrame('sess-qq', delta('new', 'new preamble'));
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'new preamble' }] } } });
+    await outbound.awaitText('sess-qq');
+    expect(replyPolicy.hasReplyDelivered({} as SessionRecord)).toBe(false); expect(text.size).toBe(0); expect(bot.sendMarkdown).not.toHaveBeenCalled();
+  });
+  it('acknowledges a receipted prefix without deduplicating its unconfirmed final tail', async () => {
+    const { replyPolicy, text } = policy(), { outbound, bot, session } = setup({ replyPolicy });
+    vi.mocked(session.update).mockResolvedValueOnce({ id: 'prefix' }).mockRejectedValue(new Error('tail unknown'));
+    vi.mocked(session.complete).mockRejectedValue(new Error('completion unknown'));
+    outbound.routeStreamFrame('sess-qq', start('one')); outbound.routeStreamFrame('sess-qq', delta('one', 'confirmed'));
+    await vi.advanceTimersByTimeAsync(200); outbound.routeStreamFrame('sess-qq', delta('one', ' unknown tail'));
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'confirmed unknown tail' }] } } });
+    await outbound.awaitText('sess-qq');
+    expect(replyPolicy.hasReplyDelivered({} as SessionRecord)).toBe(true); expect([...text]).toEqual(['confirmed']);
+    expect(replyPolicy.hasDeliveredText({} as SessionRecord, 'confirmed unknown tail')).toBe(false); expect(bot.sendMarkdown).not.toHaveBeenCalled();
+  });
+  it('suppresses identical explicit/final text while still delivering a different AI stage update', async () => {
+    const { replyPolicy, text } = policy(); text.add('已经发送好了。');
+    const { outbound, bot } = setup({ replyPolicy }); const session = { header: { id: 'sess-qq' } };
+    const emit = (attempt: string, value: string) => {
+      outbound.routeStreamFrame('sess-qq', start(attempt)); outbound.routeStreamFrame('sess-qq', delta(attempt, value));
+      outbound.routeSessionEvent(session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: value }] } } });
+    };
+    emit('duplicate', '已经发送好了。'); await outbound.awaitText('sess-qq'); expect(bot.sendMarkdown).not.toHaveBeenCalled(); expect(bot.openStream).not.toHaveBeenCalled();
+    emit('progress', '资料已找到，现在开始整理页面。'); await outbound.awaitText('sess-qq');
+    expect(bot.sendMarkdown).toHaveBeenCalledExactlyOnceWith(c2cTarget, '资料已找到，现在开始整理页面。');
+    emit('repeated-progress', '资料已找到，现在开始整理页面。'); await outbound.awaitText('sess-qq'); expect(bot.sendMarkdown).toHaveBeenCalledTimes(1);
+  });
+  it('discards cancelled buffers, late messages, failures and presented files', async () => {
+    const abort = new AbortController(), record = createRecord(c2cTarget); record.requestSignal = abort.signal;
+    const deliverer = { deliver: vi.fn() }, { outbound, bot } = setup({ record, deliverer }); const session = { header: { id: 'sess-qq' } };
+    outbound.routeStreamFrame('sess-qq', start('old')); outbound.routeStreamFrame('sess-qq', delta('old', '尚未发送的文字'));
+    outbound.routeSessionEvent(session, { type: 'deliverables/presented', data: { turn: 1, callId: 'present', files: [{ path: '/old.pdf' }] } });
+    abort.abort();
+    outbound.routeSessionEvent(session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '迟到的旧回复' }] } } });
+    outbound.routeSessionEvent(session, { type: 'turn/end', data: { reason: { kind: 'error', code: 'CANCELLED', message: 'stop' } } });
+    await outbound.awaitText('sess-qq'); expect(bot.sendMarkdown).not.toHaveBeenCalled(); expect(bot.openStream).not.toHaveBeenCalled(); expect(deliverer.deliver).not.toHaveBeenCalled();
+  });
+  it('interrupts a waiting pre-execute gate without waiting for an uncancellable SDK promise', async () => {
+    const { outbound, bot } = setup({ config: createConfig({ streaming: false }) }); vi.mocked(bot.sendMarkdown).mockReturnValue(new Promise(() => {}));
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '准备开始' }] } } });
+    const controller = new AbortController(), waiting = outbound.awaitText('sess-qq', controller.signal); controller.abort(new Error('urgent stop'));
+    await expect(waiting).rejects.toThrow('urgent stop'); outbound.cancel('sess-qq');
+  });
+  it.each([false, true])('leaves internal tool errors to AI unless diagnostics are enabled: %s', async showToolResults => {
+    const { replyPolicy } = policy(), { outbound, bot } = setup({ config: createConfig({ showToolResults, streaming: false }), replyPolicy }); const session = { header: { id: 'sess-qq' } };
+    outbound.routeSessionEvent(session, { type: 'tool/call', data: { callId: 'gate', name: 'zeta_speech_generate', arguments: '{}' } });
+    outbound.routeSessionEvent(session, { type: 'tool/result', data: { message: { source: { callId: 'gate' } }, error: { name: 'ToolError', code: 'ACK_REQUIRED' } } });
+    expect(bot.sendMarkdown).toHaveBeenCalledTimes(showToolResults ? 1 : 0);
+    outbound.routeSessionEvent(session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '我会先准备合适的语气，再生成这段语音。' }] } } });
+    await outbound.awaitText('sess-qq'); expect(bot.sendMarkdown).toHaveBeenLastCalledWith(c2cTarget, '我会先准备合适的语气，再生成这段语音。');
+  });
+});
 
 describe('intentional group silence', () => {
   it('sends no automatic final text, placeholder, tool failure, turn failure or presented file', async () => {

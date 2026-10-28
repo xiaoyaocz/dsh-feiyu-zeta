@@ -4,6 +4,7 @@ import { attachmentProcessor } from "../middleware/attachment.js";
 import { questionAnswer } from "../middleware/question-answer.js";
 import { getHistoryStore, historyGroupKey } from "../features/history-store.js";
 import { conversationDiscovery } from "../zeta/discovery.js";
+import { naturalStop } from "../middleware/stop.js";
 export function setupMiddlewares(bot, config, manager, logger, zeta, cancelQueued) {
     // 1. 错误兜底（最外层洋葱皮）
     bot.use(errorHandler());
@@ -25,6 +26,9 @@ export function setupMiddlewares(bot, config, manager, logger, zeta, cancelQueue
             }
         },
     }));
+    // Urgent cancellation must not wait for discovery, mention gates, rate
+    // limits, attachment downloads or the conversation's normal request queue.
+    bot.use(naturalStop(manager, cancelQueued));
     // Accepted messages reveal their QQ destination even when mention/command
     // middleware later stops them. Discovery never starts a model turn.
     if (zeta)

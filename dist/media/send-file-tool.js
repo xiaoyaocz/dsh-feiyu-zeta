@@ -1,8 +1,8 @@
 /**
  * 内置 qqbot_send_file 工具 — 将本地文件发送给 QQ 用户或群。
  *
- *   - 发送目标默认自动定位（exec.agent → SessionManager.findByAgent → replyTarget），
- *     无需模型手动传 openid；显式 target 参数作为覆盖。
+ *   - Zeta 接入要求显式目标，使用目录返回的 target；
+ *     单独使用上游适配器时仍支持原有当前会话定位。
  *   - 按扩展名分发到 SDK 的 sendImage / sendVideo / sendVoice / sendFile。
  *   - 路径白名单：默认只允许访问 media 目录 + agent cwd，可开关 + 扩展白名单。
  */
@@ -36,7 +36,7 @@ export function registerSendFileTool(ctx, bot, manager, config, logger, zeta) {
     const cwd = config.cwd || process.cwd();
     const definition = {
         name: SEND_FILE_TOOL_NAME,
-        description: DESCRIPTION,
+        description: zeta ? 'Send an existing local image, video, voice or file to the explicit QQ target returned by zeta_conversation_list. Always provide file_path and target; a request to send to a group must name that group target, never the requesting private chat. After a successful receipt, do not send the same file again. Use zeta_speech_send to deliver saved speech without regeneration.' : DESCRIPTION,
         parameters: {
             type: 'object',
             properties: {
@@ -46,10 +46,10 @@ export function registerSendFileTool(ctx, bot, manager, config, logger, zeta) {
                 },
                 target: {
                     type: 'string',
-                    description: 'Optional send target as "c2c:openid" or "group:openid". Omit to send to the current conversation.',
+                    description: zeta ? 'Required actual destination as "c2c:openid" or "group:openid", from zeta_conversation_list. Never omit or guess the target.' : 'Optional send target as "c2c:openid" or "group:openid". Omit to send to the current conversation.',
                 },
             },
-            required: ['file_path'],
+            required: zeta ? ['file_path', 'target'] : ['file_path'],
             additionalProperties: false,
         },
         output: {

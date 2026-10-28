@@ -6,7 +6,13 @@ import { clearGroupHistory } from "../features/history-store.js";
  * 处理 QQ 入站消息（已经过 SDK 中间件链）
  */
 export async function handleInbound(ctx, manager, config, logger, zeta, batch = [ctx], history = {}) {
+    const requestAbort = new AbortController();
+    const signal = AbortSignal.any([requestAbort.signal, ...batch.map(item => item.signal)]);
+    if (signal.aborted)
+        return;
     await zeta?.waitForMaintenance();
+    if (signal.aborted)
+        return;
     const msg = ctx.message;
     const { bot } = ctx;
     const scope = msg.kind === 'group' ? 'group' : 'c2c';
@@ -29,18 +35,28 @@ export async function handleInbound(ctx, manager, config, logger, zeta, batch = 
     logger.info(`Processing: scope=${scope} peerId=${peerId} body="${agentBody.slice(0, 200)}"`);
     // ── 获取或创建会话 ──
     let record;
+    let requestHandle;
     try {
         record = await manager.getOrCreate(scope, peerId, msg.senderId, replyTarget);
+        if (signal.aborted)
+            return;
+        record.requestSignal = signal;
+        record.abortRequest = () => requestAbort.abort();
         if (zeta) {
             await zeta.bindRecord(record);
+            if (signal.aborted) {
+                record.agent.cancel({ kind: 'user' });
+                return;
+            }
             zeta.noteAttachments(record.agent, messages.flatMap(item => [...(item.state.downloadedFiles ?? []), ...(item.state.downloadedQuoteFiles ?? [])]).map(file => file.localPath));
-            zeta.beginRequest(record.agent, messages.map(item => ({ senderId: item.message.senderId, messageId: item.message.messageId, text: item.message.content })), scope === 'group');
+            requestHandle = zeta.beginRequest(record.agent, messages.map(item => ({ senderId: item.message.senderId, messageId: item.message.messageId, text: item.message.content })), scope === 'group', signal);
+            record.requestHandle = requestHandle;
         }
     }
     catch (err) {
         logger.error(`ERROR creating session: ${err instanceof Error ? err.message : String(err)}`);
         // 兜底回复：会话创建失败时告知用户，避免静默无响应
-        if (scope !== 'group') {
+        if (scope !== 'group' && !signal.aborted) {
             try {
                 await bot.sendMarkdown(replyTarget, '⚠️ 处理消息时出现异常，请稍后重试。');
             }
@@ -57,12 +73,11 @@ export async function handleInbound(ctx, manager, config, logger, zeta, batch = 
         source: { kind: 'user' },
     });
     const abort = () => { record.agent.cancel({ kind: 'user' }); };
-    for (const item of batch)
-        item.signal.addEventListener('abort', abort, { once: true });
-    if (batch.some(item => item.signal.aborted)) {
-        for (const item of batch)
-            item.signal.removeEventListener('abort', abort);
-        zeta?.endRequest(record.agent);
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) {
+        signal.removeEventListener('abort', abort);
+        if (requestHandle)
+            zeta?.endRequest(record.agent, requestHandle);
         return;
     }
     // 阻塞等待本轮 turn 收敛，避免后续消息在 turn 运行期间被 followup 打断
@@ -79,9 +94,21 @@ export async function handleInbound(ctx, manager, config, logger, zeta, batch = 
         logger.warn(`whenIdle rejected: ${err instanceof Error ? err.message : String(err)}`);
     }
     finally {
-        for (const item of batch)
-            item.signal.removeEventListener('abort', abort);
-        zeta?.endRequest(record.agent);
+        // The turn-end listener may still be delivering its final committed text.
+        // Keep this request's target/authority until its own sends have settled.
+        try {
+            await manager.waitForReplies?.(record.sessionId, signal);
+        }
+        catch (error) {
+            if (!signal.aborted)
+                logger.warn(`reply completion failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        signal.removeEventListener('abort', abort);
+        if (requestHandle)
+            zeta?.endRequest(record.agent, requestHandle);
+        requestAbort.abort();
+        if (record.requestSignal === signal)
+            delete record.abortRequest;
     }
 }
 // ══════════════════════════════════════════════════════════════

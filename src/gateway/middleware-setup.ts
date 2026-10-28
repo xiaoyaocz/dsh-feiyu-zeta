@@ -27,6 +27,7 @@ import { questionAnswer } from '../middleware/question-answer.ts';
 import { getHistoryStore, historyGroupKey } from '../features/history-store.ts';
 import type { ZetaRuntime } from '../zeta/runtime.ts';
 import { conversationDiscovery } from '../zeta/discovery.ts';
+import { naturalStop } from '../middleware/stop.ts';
 
 export function setupMiddlewares(
   bot: QQBot,
@@ -58,6 +59,10 @@ export function setupMiddlewares(
       }
     },
   }));
+
+  // Urgent cancellation must not wait for discovery, mention gates, rate
+  // limits, attachment downloads or the conversation's normal request queue.
+  bot.use(naturalStop(manager, cancelQueued));
 
   // Accepted messages reveal their QQ destination even when mention/command
   // middleware later stops them. Discovery never starts a model turn.

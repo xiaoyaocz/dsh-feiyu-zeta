@@ -110,7 +110,8 @@ describe('one public material namespace with durable legacy receipts', () => {
       return String(url).includes('/tasks/') ? json({ code: 200, data: { id: 'old-task', status: 'completed', result: { images: [{ url: ['https://images.example.com/old.png'] }] } } }) : new Response(png);
     });
     const service = new ImageService(host, () => ({ ...DEFAULT_IMAGE_SETTINGS, enabled: true }), new PersonaService(host), { fetch: request }); cleanup.push(() => service.dispose());
-    expect((await service.generate({ prompt: 'cat', send: true, wait: false }, exec())).status).toBe('completed'); expect(send).not.toHaveBeenCalled();
+    await expect(service.generate({ prompt: 'cat', send: true, wait: false }, exec())).rejects.toThrow('target');
+    expect((await service.status(id, exec())).status).toBe('completed'); expect(send).not.toHaveBeenCalled();
     expect((await service.status(id, exec('b'))).taskId).toBe('old-task');
     await migrateSharedMaterials(root); expect((await service.status(id, exec('life'))).status).toBe('completed'); expect(request).toHaveBeenCalledTimes(2);
   });
@@ -134,7 +135,10 @@ describe('one public material namespace with durable legacy receipts', () => {
     }
     expect((await migrateSharedMaterials(root)).speech).toBe(2);
     const voices = await listSpeechFiles(host, exec('b').agent); expect(voices).toHaveLength(2);
-    const request = vi.fn<typeof fetch>(); const result = await generateSpeech(host, speechSettings, { text: '你好', send: true }, exec(), { fetch: request });
+    const request = vi.fn<typeof fetch>();
+    await expect(generateSpeech(host, speechSettings, { text: '你好', send: true }, exec(), { fetch: request })).rejects.toThrow('target');
+    const mapped = await migratedOperationId(root, 'speech', a, id);
+    const result = voices.find(voice => voice.fileName === `speech-${mapped}.wav`)!;
     expect(await readFile(result.filePath)).toEqual(wav); expect(request).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
     const old = join(root, 'speech', serviceHash(a).slice(0, 32), `speech-${id}.wav`);
     expect(await realpath(await resolveSharedMaterialFile(root, old))).toBe(await realpath(result.filePath));
@@ -276,7 +280,7 @@ describe('shared assets do not share active tasks or delivery authority', () => 
       const request = vi.fn<typeof fetch>(async (url, init) => init?.method === 'POST' ? json({ code: 200, data: [{ task_id: 'task-a' }] }) :
         String(url).includes('/tasks/') ? json({ code: 200, data: { id: 'task-a', status: completed ? 'completed' : 'pending', ...(completed ? { result: { images: [{ url: ['https://images.example.com/a.png'] }] } } : {}) } }) : new Response(png));
       const service = new ImageService(host, () => ({ ...DEFAULT_IMAGE_SETTINGS, enabled: true }), new PersonaService(host), { fetch: request }); cleanup.push(() => service.dispose());
-      const result = await service.generate({ prompt: 'cat', send: true, wait: false }, exec('a'));
+      const result = await service.generate({ prompt: 'cat', send: true, target: 'c2c:a', wait: false }, exec('a'));
       completed = true; const queried = await service.status(result.id, exec(queryingActor));
       expect(queried).toMatchObject({ status: 'completed', delivery: 'not_requested' }); expect(send).not.toHaveBeenCalled();
       await service.status(result.id, exec('a')); expect(send).not.toHaveBeenCalled();

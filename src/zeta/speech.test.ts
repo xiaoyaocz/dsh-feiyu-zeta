@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ModuleExecution, ModuleHost, SpeechSettings } from './contracts.ts';
-import { generateSpeech, listSpeechFiles, registerSpeechTools, SPEECH_ENDPOINTS, synthesizeSpeech, validateSpeechArguments } from './speech.ts';
+import { generateSpeech, listSpeechFiles, registerSpeechTools, sendSpeech, SPEECH_ENDPOINTS, synthesizeSpeech, validateSpeechArguments } from './speech.ts';
 
 const roots: string[] = [];
 const wave = Buffer.from('524946462400000057415645666d74201000000001000100805d000000bb0000020010006461746100000000', 'hex');
@@ -21,7 +21,7 @@ const execution = (id = 'one', agent: unknown = { id: 'a' }): ModuleExecution =>
 async function fixture(): Promise<{ host: ModuleHost; sent: ReturnType<typeof vi.fn>; credentials: ReturnType<typeof vi.fn> }> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-zeta-speech-'));
   roots.push(root);
-  const sent = vi.fn(async () => ({ messageId: 'sent-1' }));
+  const sent = vi.fn(async (_agent: unknown, _path: string, target: string) => ({ status: 'accepted', messageId: 'sent-1', target }));
   const credentials = vi.fn(async (provider: 'mimo' | 'minimax') => `${provider}-secret`);
   const host = {
     dataDir: root,
@@ -143,11 +143,12 @@ describe('scoped generation and actual delivery', () => {
   it('uses independent provider credentials and reports a confirmed QQ receipt', async () => {
     const { host, credentials, sent } = await fixture();
     const requestFetch = vi.fn<typeof fetch>(async () => response('minimax'));
-    const result = await generateSpeech(host, settings(), { text: '你好', provider: 'minimax', send: true }, execution(), { fetch: requestFetch });
+    const result = await generateSpeech(host, settings(), { text: '你好', provider: 'minimax', send: true, target: 'group:friends' }, execution(), { fetch: requestFetch });
     expect(credentials).toHaveBeenCalledExactlyOnceWith('minimax');
     expect(result.delivery).toBe('sent');
-    expect(result.receipt).toEqual({ messageId: 'sent-1' });
-    expect(sent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'a' }), result.filePath, undefined, expect.any(AbortSignal));
+    expect(result.receipt).toEqual({ status: 'accepted', messageId: 'sent-1', target: 'group:friends' });
+    expect(result.target).toBe('group:friends'); expect(result.requestedTarget).toBe('group:friends');
+    expect(sent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'a' }), result.filePath, 'group:friends', expect.any(AbortSignal));
   });
 
   it('does not charge when no trustworthy conversation scope exists', async () => {
@@ -179,10 +180,10 @@ describe('scoped generation and actual delivery', () => {
   it('reuses a settled invocation and prevents duplicate sending', async () => {
     const { host, sent } = await fixture();
     const requestFetch = vi.fn<typeof fetch>(async () => response());
-    const args = { text: '你好', send: true };
+    const args = { text: '你好', send: true, target: 'group:friends' };
     const first = await generateSpeech(host, settings(), args, execution(), { fetch: requestFetch });
     const second = await generateSpeech(host, settings(), args, execution(), { fetch: requestFetch });
-    expect(second).toEqual(first);
+    expect(second).toMatchObject({ fileName: first.fileName, delivery: 'sent', target: 'group:friends', reused: true });
     expect(requestFetch).toHaveBeenCalledTimes(1);
     expect(sent).toHaveBeenCalledTimes(1);
   });
@@ -190,7 +191,7 @@ describe('scoped generation and actual delivery', () => {
   it('retains generated audio when sending fails and does not send it again automatically', async () => {
     const { host, sent } = await fixture(); sent.mockRejectedValue(new Error('platform connection lost'));
     const requestFetch = vi.fn<typeof fetch>(async () => response());
-    const args = { text: '你好', send: true };
+    const args = { text: '你好', send: true, target: 'group:friends' };
     const first = await generateSpeech(host, settings(), args, execution(), { fetch: requestFetch });
     expect(first.generation).toBe('completed');
     expect(first.delivery).toBe('unknown');
@@ -205,7 +206,7 @@ describe('scoped generation and actual delivery', () => {
     const { host, sent } = await fixture();
     sent.mockResolvedValue({ apiKey: 'sdk-secret', internal: { headers: { authorization: 'secret' } } });
     const requestFetch = vi.fn<typeof fetch>(async () => response());
-    const result = await generateSpeech(host, settings(), { text: '你好', send: true }, execution(), { fetch: requestFetch });
+    const result = await generateSpeech(host, settings(), { text: '你好', send: true, target: 'group:friends' }, execution(), { fetch: requestFetch });
     expect(result.delivery).toBe('unknown');
     expect(result.receipt).toEqual({});
     expect(JSON.stringify(result)).not.toContain('secret');
@@ -254,7 +255,7 @@ describe('scoped generation and actual delivery', () => {
       generateSpeech(host, settings(), { text: '你好' }, execution(), { fetch: requestFetch }),
       generateSpeech(host, settings(), { text: '你好' }, execution(), { fetch: requestFetch }),
     ]);
-    expect(a).toEqual(b);
+    expect(a.fileName).toBe(b.fileName); expect(a.reused || b.reused).toBe(true);
     expect(requestFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -286,5 +287,162 @@ describe('speech argument boundaries', () => {
     expect(() => validateSpeechArguments({ text: '你好', namespace: 'someone-else' }, settings())).toThrow('参数无效');
     expect(() => validateSpeechArguments({ text: '你好', target: 'c2c:other' }, settings())).toThrow('只有请求发送');
     expect(() => validateSpeechArguments({ text: '你好', send: true, target: '../../other' }, settings())).toThrow('格式');
+  });
+});
+
+describe('explicit destinations, request-level synthesis and existing speech delivery', () => {
+  it('rejects missing or unauthorized targets before credentials, hooks or paid generation', async () => {
+    const { host, credentials, sent } = await fixture(), beforeGenerate = vi.fn();
+    const requestFetch = vi.fn<typeof fetch>(async () => response());
+    await expect(generateSpeech(host, settings(), { text: '群自我介绍', send: true }, execution(), { fetch: requestFetch, beforeGenerate })).rejects.toMatchObject({ code: 'TARGET_REQUIRED' });
+    expect(beforeGenerate).not.toHaveBeenCalled();
+    const check = vi.fn(() => { throw new Error('Unknown or forbidden group'); }); host.validateSendTarget = check;
+    await expect(generateSpeech(host, settings(), { text: '群自我介绍', send: true, target: 'group:unknown' }, execution(), { fetch: requestFetch, beforeGenerate })).rejects.toThrow('Unknown or forbidden group');
+    expect(check).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }), 'group:unknown', 'speech');
+    expect(credentials).not.toHaveBeenCalled(); expect(requestFetch).not.toHaveBeenCalled(); expect(sent).not.toHaveBeenCalled(); expect(beforeGenerate).not.toHaveBeenCalled();
+  });
+  it('charges and delivers once for different callIds in the same real request', async () => {
+    const { host, sent, credentials } = await fixture(); host.requestKeyFor = () => 'qq-real-message-ids';
+    const requestFetch = vi.fn<typeof fetch>(async () => response()), args = { text: ' 我是小鲸鱼。 ', send: true, target: 'group:friends' };
+    const first = await generateSpeech(host, settings(), args, execution('call-1'), { fetch: requestFetch });
+    const repeated = await generateSpeech(host, settings(), { ...args, text: '我是小鲸鱼。' }, execution('call-2'), { fetch: requestFetch });
+    expect(repeated).toMatchObject({ fileName: first.fileName, generation: 'completed', delivery: 'sent', target: 'group:friends', reused: true });
+    expect(repeated.notice).toContain('不要重复'); expect(requestFetch).toHaveBeenCalledTimes(1); expect(credentials).toHaveBeenCalledTimes(1); expect(sent).toHaveBeenCalledTimes(1);
+  });
+  it('coalesces concurrent semantic generation and permits a generated-only result to be sent without another charge', async () => {
+    const { host, sent } = await fixture(); host.requestKeyFor = () => 'one-source-message';
+    const requestFetch = vi.fn<typeof fetch>(async () => response());
+    const [preview, delivered] = await Promise.all([
+      generateSpeech(host, settings(), { text: '同一条介绍' }, execution('preview'), { fetch: requestFetch }),
+      generateSpeech(host, settings(), { text: '同一条介绍', send: true, target: 'group:friends' }, execution('send'), { fetch: requestFetch }),
+    ]);
+    expect(preview.fileName).toBe(delivered.fileName); expect(delivered).toMatchObject({ target: 'group:friends', delivery: 'sent' });
+    expect(preview.reused || delivered.reused).toBe(true);
+    expect(requestFetch).toHaveBeenCalledTimes(1); expect(sent).toHaveBeenCalledTimes(1);
+  });
+  it('never treats a private-chat receipt as delivery to a newly requested group', async () => {
+    const { host, sent, credentials } = await fixture(); host.requestKeyFor = () => 'same-request';
+    const requestFetch = vi.fn<typeof fetch>(async () => response());
+    const first = await generateSpeech(host, settings(), { text: '自我介绍', send: true, target: 'c2c:a' }, execution('first'), { fetch: requestFetch });
+    await expect(generateSpeech(host, settings(), { text: '自我介绍', send: true, target: 'group:friends' }, execution('second'), { fetch: requestFetch })).rejects.toMatchObject({ code: 'TARGET_CONFLICT' });
+    const corrected = await sendSpeech(host, { fileName: first.fileName, target: 'group:friends' }, execution('reuse-correct-target'));
+    expect(corrected).toMatchObject({ target: 'group:friends', requestedTarget: 'group:friends', delivery: 'sent', reused: true });
+    expect(requestFetch).toHaveBeenCalledTimes(1); expect(credentials).toHaveBeenCalledTimes(1); expect(sent.mock.calls.map(call => call[2])).toEqual(['c2c:a', 'group:friends']);
+    const listed = await listSpeechFiles(host, { id: 'a' }); expect(listed[0]?.target).toBe('group:friends');
+  });
+  it('preserves an unknown paid outcome across new model call ids', async () => {
+    const { host, sent } = await fixture(); host.requestKeyFor = () => 'same-request';
+    const requestFetch = vi.fn<typeof fetch>(async () => { throw new Error('provider outcome unknown'); });
+    await expect(generateSpeech(host, settings(), { text: '介绍' }, execution('first'), { fetch: requestFetch })).rejects.toMatchObject({ code: 'UNKNOWN' });
+    await expect(generateSpeech(host, settings(), { text: '介绍' }, execution('second'), { fetch: requestFetch })).rejects.toMatchObject({ code: 'OUTCOME_UNKNOWN' });
+    expect(requestFetch).toHaveBeenCalledTimes(1); expect(sent).not.toHaveBeenCalled();
+  });
+  it('records cancellation after provider submission and never charges that request again', async () => {
+    const { host, sent } = await fixture(); host.requestKeyFor = () => 'same-source-request';
+    const controller = new AbortController(), requestFetch = vi.fn<typeof fetch>(async () => { controller.abort(); return response(); });
+    await expect(generateSpeech(host, settings(), { text: '介绍', send: true, target: 'group:friends' }, { ...execution('first'), signal: controller.signal }, { fetch: requestFetch })).rejects.toMatchObject({ code: 'ABORTED' });
+    await expect(generateSpeech(host, settings(), { text: '介绍', send: true, target: 'group:friends' }, execution('second'), { fetch: requestFetch })).rejects.toMatchObject({ code: 'OUTCOME_UNKNOWN' });
+    expect(requestFetch).toHaveBeenCalledTimes(1); expect(sent).not.toHaveBeenCalled();
+  });
+  it('retains a generated file if cancellation occurs before dispatch and reuses it on a new explicit request', async () => {
+    const { host, sent } = await fixture(); let requestKey = 'first-request'; host.requestKeyFor = () => requestKey;
+    const controller = new AbortController(), requestFetch = vi.fn<typeof fetch>(async () => response());
+    let checks = 0; host.validateSendTarget = () => { if (++checks === 2) controller.abort(); };
+    await expect(generateSpeech(host, settings(), { text: '介绍', send: true, target: 'group:friends' }, { ...execution(), signal: controller.signal }, { fetch: requestFetch })).rejects.toMatchObject({ code: 'ABORTED' });
+    const [audio] = await listSpeechFiles(host, { id: 'a' }); expect(audio).toMatchObject({ generation: 'completed', delivery: 'not_requested' });
+    expect(sent).not.toHaveBeenCalled(); requestKey = 'explicit-send-after-stop';
+    expect(await sendSpeech(host, { fileName: audio!.fileName, target: 'group:friends' }, execution('send'))).toMatchObject({ delivery: 'sent', target: 'group:friends', reused: true });
+    expect(requestFetch).toHaveBeenCalledTimes(1); expect(sent).toHaveBeenCalledTimes(1);
+  });
+  it('reuses pre-upgrade full-fingerprint records instead of charging under the new request identity', async () => {
+    const { host, sent } = await fixture(), requestFetch = vi.fn<typeof fetch>(async () => response());
+    const args = { text: '旧记录', send: true, target: 'group:friends' };
+    const old = await generateSpeech(host, settings(), args, execution('old-call'), { fetch: requestFetch });
+    const path = old.filePath.replace(/\.wav$/u, '.json'), manifest = JSON.parse(await readFile(path, 'utf8')); delete manifest.generationFingerprint;
+    await writeFile(path, JSON.stringify(manifest)); host.requestKeyFor = () => 'new-runtime-real-message';
+    const reused = await generateSpeech(host, settings(), args, execution('old-call'), { fetch: requestFetch });
+    expect(reused).toMatchObject({ fileName: old.fileName, target: 'group:friends', reused: true });
+    expect(requestFetch).toHaveBeenCalledTimes(1); expect(sent).toHaveBeenCalledTimes(1);
+  });
+  it('keeps an incomplete legacy call-id manifest authoritative after the host gains request identities', async () => {
+    const { host, sent } = await fixture(), requestFetch = vi.fn<typeof fetch>(async () => { throw new Error('old interrupted request'); });
+    await expect(generateSpeech(host, settings(), { text: '旧请求' }, execution('old-call'), { fetch: requestFetch })).rejects.toMatchObject({ code: 'UNKNOWN' });
+    const directory = join(host.dataDir, 'a', 'speech'), name = (await readdir(directory)).find(name => name.endsWith('.json'))!;
+    const path = join(directory, name), manifest = JSON.parse(await readFile(path, 'utf8')); delete manifest.generationFingerprint;
+    await writeFile(path, JSON.stringify(manifest)); host.requestKeyFor = () => 'upgraded-request-id';
+    await expect(generateSpeech(host, settings(), { text: '旧请求' }, execution('old-call'), { fetch: requestFetch })).rejects.toMatchObject({ code: 'OUTCOME_UNKNOWN' });
+    expect(requestFetch).toHaveBeenCalledTimes(1); expect(sent).not.toHaveBeenCalled();
+  });
+  it('reuses verified audio across later requests and serializes duplicate delivery per target', async () => {
+    const { host, sent, credentials } = await fixture(), requestFetch = vi.fn<typeof fetch>(async () => response());
+    const audio = await generateSpeech(host, settings(), { text: '已经生成的介绍' }, execution('generate'), { fetch: requestFetch });
+    const values = await Promise.all(['first-send', 'new-model-call', 'another-user-turn'].map(id => sendSpeech(host, { fileName: audio.fileName, target: 'group:friends' }, execution(id))));
+    expect(values.every(value => value.delivery === 'sent' && value.target === 'group:friends')).toBe(true);
+    expect(sent).toHaveBeenCalledTimes(1); expect(credentials).toHaveBeenCalledTimes(1); expect(requestFetch).toHaveBeenCalledTimes(1);
+  });
+  it('does not repeat unknown or missing-target platform receipts through the reuse tool', async () => {
+    const { host, sent } = await fixture(), requestFetch = vi.fn<typeof fetch>(async () => response());
+    sent.mockResolvedValue({ status: 'accepted', messageId: 'receipt-without-target' } as never);
+    const audio = await generateSpeech(host, settings(), { text: '介绍', send: true, target: 'group:friends' }, execution(), { fetch: requestFetch });
+    expect(audio.delivery).toBe('unknown'); expect(audio.target).toBeUndefined(); expect(audio.requestedTarget).toBe('group:friends');
+    const again = await sendSpeech(host, { fileName: audio.fileName, target: 'group:friends' }, execution('later'));
+    expect(again).toMatchObject({ delivery: 'unknown', reused: true }); expect(sent).toHaveBeenCalledTimes(1); expect(requestFetch).toHaveBeenCalledTimes(1);
+  });
+  it('permits one explicit resend in a new real request without another synthesis charge', async () => {
+    const { host, sent, credentials } = await fixture(), requestFetch = vi.fn<typeof fetch>(async () => response());
+    let requestKey = 'first-user-message'; host.requestKeyFor = () => requestKey;
+    const audio = await generateSpeech(host, settings(), { text: '介绍', send: true, target: 'group:friends' }, execution('generate'), { fetch: requestFetch });
+    await sendSpeech(host, { fileName: audio.fileName, target: 'group:friends' }, execution('same-user-message-different-call'));
+    expect(sent).toHaveBeenCalledTimes(1);
+    requestKey = 'explicit-resend-user-message';
+    const [first, repeated] = await Promise.all(['send-1', 'send-2'].map(callId => sendSpeech(host, { fileName: audio.fileName, target: 'group:friends' }, execution(callId))));
+    expect([first, repeated]).toEqual([expect.objectContaining({ target: 'group:friends', delivery: 'sent', reused: true }), expect.objectContaining({ target: 'group:friends', delivery: 'sent', reused: true })]);
+    expect(sent).toHaveBeenCalledTimes(2); expect(requestFetch).toHaveBeenCalledTimes(1); expect(credentials).toHaveBeenCalledTimes(1);
+    requestKey = 'first-user-message';
+    await sendSpeech(host, { fileName: audio.fileName, target: 'group:friends' }, execution('old-request-replayed'));
+    expect(sent).toHaveBeenCalledTimes(2);
+  });
+  it('keeps an unknown delivery for the original request and permits a new user request to resend the existing file', async () => {
+    const { host, sent } = await fixture(), requestFetch = vi.fn<typeof fetch>(async () => response());
+    let requestKey = 'first-user-message'; host.requestKeyFor = () => requestKey;
+    sent.mockRejectedValueOnce(new Error('SDK response lost'));
+    const audio = await generateSpeech(host, settings(), { text: '介绍', send: true, target: 'group:friends' }, execution(), { fetch: requestFetch });
+    expect(audio.delivery).toBe('unknown');
+    await sendSpeech(host, { fileName: audio.fileName, target: 'group:friends' }, execution('same-request'));
+    expect(sent).toHaveBeenCalledTimes(1);
+    requestKey = 'new-explicit-user-request';
+    expect(await sendSpeech(host, { fileName: audio.fileName, target: 'group:friends' }, execution('retry-existing-file'))).toMatchObject({ delivery: 'sent', target: 'group:friends', reused: true });
+    requestKey = 'first-user-message';
+    expect(await sendSpeech(host, { fileName: audio.fileName, target: 'group:friends' }, execution('old-request'))).toMatchObject({ delivery: 'unknown', reused: true });
+    expect(sent).toHaveBeenCalledTimes(2); expect(requestFetch).toHaveBeenCalledTimes(1);
+  });
+  it('reports a mismatching actual target without claiming success for the requested destination', async () => {
+    const { host, sent } = await fixture(); sent.mockResolvedValue({ status: 'accepted', messageId: 'unexpected-route', target: 'c2c:a' });
+    const audio = await generateSpeech(host, settings(), { text: '介绍', send: true, target: 'group:friends' }, execution(), { fetch: vi.fn<typeof fetch>(async () => response()) });
+    expect(audio).toMatchObject({ delivery: 'unknown', target: 'c2c:a', requestedTarget: 'group:friends' });
+  });
+  it('refuses arbitrary, missing, tampered or pre-cancelled reusable audio', async () => {
+    const { host, sent, credentials } = await fixture(), requestFetch = vi.fn<typeof fetch>(async () => response());
+    await expect(sendSpeech(host, { fileName: '../../private.wav', target: 'group:friends' }, execution())).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(sendSpeech(host, { fileName: 'speech-' + 'a'.repeat(40) + '.wav' }, execution())).rejects.toMatchObject({ code: 'TARGET_REQUIRED' });
+    const audio = await generateSpeech(host, settings(), { text: '介绍' }, execution(), { fetch: requestFetch });
+    const cancelled = new AbortController(); cancelled.abort();
+    await expect(sendSpeech(host, { fileName: audio.fileName, target: 'group:friends' }, { ...execution('cancelled'), signal: cancelled.signal })).rejects.toMatchObject({ code: 'ABORTED' });
+    await writeFile(audio.filePath, 'tampered');
+    await expect(sendSpeech(host, { fileName: audio.fileName, target: 'group:friends' }, execution('tampered'))).rejects.toMatchObject({ code: 'LOCAL_STATE' });
+    expect(sent).not.toHaveBeenCalled(); expect(credentials).toHaveBeenCalledTimes(1); expect(requestFetch).toHaveBeenCalledTimes(1);
+  });
+  it('registers reuse tools with explicit target schema and separates actual delivery from generation in rendering', async () => {
+    const { host } = await fixture(), definitions: any[] = [];
+    (host.ctx as unknown as { get: () => unknown }).get = () => ({ register: (definition: unknown) => definitions.push(definition) });
+    const requestFetch = vi.fn<typeof fetch>(async () => response()); registerSpeechTools(host, settings, { fetch: requestFetch });
+    expect(definitions.map(value => value.name)).toEqual(['zeta_speech_generate', 'zeta_speech_list', 'zeta_speech_send']);
+    expect(definitions[2].parameters.required).toEqual(['fileName', 'target']);
+    const audio = await definitions[0].execute({ text: '介绍' }, execution());
+    expect(definitions[0].output.render({}, audio)[0].text).toContain('尚未发送到任何QQ目标');
+    const listed = await definitions[1].execute({}, execution('list')); expect(listed.items[0].fileName).toBe(audio.fileName);
+    const delivered = await definitions[2].execute({ fileName: audio.fileName, target: 'group:friends' }, execution('send'));
+    const rendered = definitions[2].output.render({}, delivered)[0].text;
+    expect(rendered).toContain('实际目标：group:friends'); expect(rendered).toContain('不要重复'); expect(requestFetch).toHaveBeenCalledTimes(1);
   });
 });

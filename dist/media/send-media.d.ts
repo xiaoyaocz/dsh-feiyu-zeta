@@ -49,5 +49,6 @@ export type SendMediaResult = {
  */
 export declare function sendMediaFile(bot: MediaSenderLike, target: ReplyTarget, filePath: string, opts?: {
     fileName?: string;
+    signal?: AbortSignal;
 }): Promise<SendMediaResult>;
 //# sourceMappingURL=send-media.d.ts.map

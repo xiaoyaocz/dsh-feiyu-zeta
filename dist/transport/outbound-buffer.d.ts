@@ -9,8 +9,12 @@ import type { SessionRecord } from '../session/index.ts';
 import type { Logger, ReplyTarget } from '../types.ts';
 /** QQ 流式会话（openStream 返回） */
 export interface StreamSessionLike {
+    /** SDK update may only queue the text; void is not a delivery receipt. */
     update(content: string): Promise<unknown>;
+    /** QQ SDK complete returns the final DONE frame's MessageResponse. */
     complete(): Promise<unknown>;
+    /** Cancel SDK throttling without publishing the pending text as DONE. */
+    cancel?(): void;
 }
 /** QQ Bot 发送接口 */
 export interface QQBotSender {
@@ -27,7 +31,14 @@ export declare class OutboundBuffer {
     private readonly bot;
     private readonly limit;
     private readonly logger;
-    constructor(record: SessionRecord, bot: QQBotSender, limit: number, logger: Logger, streamingEnabled: boolean);
+    private readonly signal?;
+    private readonly onDelivered?;
+    private readonly onAbort;
+    private cancelled;
+    constructor(record: SessionRecord, bot: QQBotSender, limit: number, logger: Logger, streamingEnabled: boolean, delivery?: {
+        signal?: AbortSignal;
+        onDelivered?(text: string): void;
+    });
     /** 追加文本增量 */
     append(text: string): void;
     /** 获取当前累积文本 */

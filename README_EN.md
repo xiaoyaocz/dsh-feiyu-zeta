@@ -4,7 +4,7 @@
 
 A **personal testing and self-use experiment** combining QQ chat, an evolving whale-inspired persona, memory, shared stickers, speech, autonomous activity and optional cloud services in one DeepSeek Harness plugin. It is not an official DeepSeek, Tencent Connect or service-provider product, and it carries no production stability guarantee.
 
-Current version: **0.4.6**. Target: **DeepSeek Harness 0.2.1-rc.3 exactly**, **Node.js >=24.9.0**. The former plugin name was `dsh-zeta`; this repository root contains the plugin itself.
+Current version: **0.4.7**. Target: **DeepSeek Harness 0.2.1-rc.3 exactly**, **Node.js >=24.9.0**. The former plugin name was `dsh-zeta`; this repository root contains the plugin itself.
 
 ## Install from GitHub
 
@@ -64,9 +64,9 @@ npm run build
 npm run check:distribution
 npm pack
 
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.6.tgz -WhatIf
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.6.tgz
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.6.tgz -Profile desktop
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.7.tgz -WhatIf
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.7.tgz
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.7.tgz -Profile desktop
 ```
 
 The local `install.sh` helper supports an already installed DSH CLI. It accepts a local archive through `--package` and defaults to the `web` profile; see `./install.sh --help`.
@@ -86,7 +86,15 @@ Administrators request sensitive actions in natural language, without a command 
 
 Memory, speech, generated images, temporary webpage records, stickers and the persona image use one shared library. There is no management-space selector. Existing records merge automatically, retaining conflicting entries and original media without repeating paid requests or QQ deliveries. Group messages are briefly collected before the model chooses to reply or stay silent. Silence sends no placeholder to QQ. Autonomous activity uses model-selected one-shot schedules rather than a fixed recurring interval.
 
-When provided by the Host, `web_search`, `web_fetch` and `read_image` are available to the stable internal autonomous session. Image reading accepts valid absolute paths only to the persona image, shared generated or sticker images, shared screenshots and built-in stickers. These native exploration permissions do not extend to ordinary QQ sessions or grant administrator rights. Unknown plugin tools, Host file access, commands and plugin configuration still require a real administrator request; QQ read-target lists, contact targets and contact limits continue to apply.
+When provided by the Host, `web_search`, `web_fetch` and `read_image` are available to ordinary QQ and autonomous sessions without administrator status. For ordinary QQ users, image reading accepts valid absolute paths only to images explicitly attached to the current inbound or quoted message, the persona image, shared generated or sticker images, shared screenshots and built-in stickers. It cannot open other chats' original attachments or arbitrary Host files; autonomous sessions can read only the shared materials above. Unknown plugin tools, Host file access, commands and plugin configuration still require a current real administrator request; QQ read-target lists, contact targets and contact limits continue to apply.
+
+For longer work, the AI first briefly acknowledges the task in the current chat, then starts searching, generating or deploying, and reports meaningful stage changes in its own words. Identical text sent explicitly and through normal assistant output is delivered once per request. Internal tool-gate guidance is not forwarded as a fixed QQ error message, and a group `skip` still sends nothing.
+
+A standalone “停停停”, “取消当前任务” or `/stop` immediately revokes the current chat's old run and clears queued work. Old tasks cannot continue calling tools, sending messages or treating late results as a new reply. A QQ SDK send already in flight cannot be recalled. A subsequent explicit instruction starts a new request rather than resuming the stopped task.
+
+Speech, image, sticker and file delivery require an explicit `target`. To send to a group, use its real target from `zeta_conversation_list`; omitting it must never fall back to the current private chat. Within one user request, identical generation parameters reuse the result across model call IDs, avoiding repeated charges, and identical media content is delivered once to each target. Generation and delivery are separate states, and only the platform receipt confirms the actual destination. Unknown outcomes are not retried automatically.
+
+Use `zeta_speech_list` to find existing audio and `zeta_speech_send({fileName,target})` to send the verified WAV without another synthesis charge. `zeta_speech_generate` with `send:true` rejects a missing `target` before charging. Results distinguish the requested target from the platform-confirmed target. Repeated calls within one request do not resend; a new explicit user request to send again may deliver the same audio once more.
 
 ## Optional services
 

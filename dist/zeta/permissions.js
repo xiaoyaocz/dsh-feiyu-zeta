@@ -23,19 +23,19 @@ const BUSINESS_TOOLS = new Set([
     'zeta_memory_set', 'zeta_memory_get', 'zeta_memory_search', 'zeta_memory_delete',
     'zeta_identity_get', 'zeta_identity_update',
     'zeta_send_message', 'zeta_contact_targets', 'zeta_conversation_list', 'zeta_conversation_read',
-    'zeta_life_update', 'zeta_life_plan_next', 'zeta_group_decide', 'zeta_speech_generate',
+    'zeta_life_update', 'zeta_life_plan_next', 'zeta_group_decide', 'zeta_speech_generate', 'zeta_speech_list', 'zeta_speech_send',
     'meme_list', 'meme_update', 'send_meme', 'learn_meme',
     'qqbot_describe_image', 'qqbot_send_file', 'ask_user_question',
     'zeta_browser', 'zeta_browser_close', 'zeta_image_generate', 'zeta_image_status',
     'zeta_persona_reference', 'zeta_deploy_page', 'zeta_deploy_status', 'zeta_deploy_delete',
 ]);
-const OUTGOING_TOOLS = new Set(['zeta_send_message', 'send_meme', 'qqbot_send_file', 'ask_user_question']);
-/** Native exploration is granted to the internal life session, never a QQ role. */
-const LIFE_EXPLORATION_TOOLS = new Set(['web_search', 'web_fetch', 'read_image']);
+const OUTGOING_TOOLS = new Set(['zeta_send_message', 'send_meme', 'qqbot_send_file', 'ask_user_question', 'zeta_speech_send']);
+/** Normal exploration for QQ and life; image paths are checked by the runtime guard. */
+const EXPLORATION_TOOLS = new Set(['web_search', 'web_fetch', 'read_image']);
 export function toolDenial(name, authority, groupDecision, actor = 'qq') {
     if (groupDecision !== undefined && groupDecision !== 'reply' && (OUTGOING_TOOLS.has(name) || name === 'zeta_speech_generate'))
         return '群聊本轮尚未决定回复；请先调用 zeta_group_decide，沉默时不会发送任何QQ消息。';
-    if (!BUSINESS_TOOLS.has(name) && !(actor === 'life' && LIFE_EXPLORATION_TOOLS.has(name))) {
+    if (!BUSINESS_TOOLS.has(name) && !EXPLORATION_TOOLS.has(name)) {
         if (actor === 'life')
             return '自主生活不能执行管理员敏感操作；修改配置、插件、凭据及宿主文件或执行命令，需要当前真实管理员发起请求。';
         if (!authority?.administrator)

@@ -147,6 +147,10 @@ export interface SessionRecord {
     senderId: string;
     lastActivity: number;
     agentPreset?: string;
+    /** Only the current QQ request may emit automatic text or files. */
+    requestSignal?: AbortSignal;
+    abortRequest?: () => void;
+    requestHandle?: string;
 }
 /** 会话状态信息（/status 用） */
 export interface SessionStatus {

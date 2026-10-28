@@ -148,7 +148,7 @@ describe('persona and ApiMart image jobs', () => {
       expect(init?.headers).toBeUndefined(); return new Response(png);
     });
     const service = new ImageService(host, () => ({ ...DEFAULT_IMAGE_SETTINGS, enabled: true }), persona, { fetch: request }); disposables.push(service);
-    const input = { prompt: '画一幅自画像', send: true };
+    const input = { prompt: '画一幅自画像', send: true, target: 'c2c:alice' };
     const first = await service.generate(input, exec()); const again = await service.generate(input, exec());
     expect(first).toEqual(again); expect(first).toMatchObject({ status: 'completed', delivery: 'sent', selfPortrait: true, cost: 0.1 });
     const body = JSON.parse(request.mock.calls[0]![1]!.body as string);
@@ -181,7 +181,7 @@ describe('persona and ApiMart image jobs', () => {
     const request = vi.fn<typeof fetch>(async (url, init) => init?.method === 'POST' ? json({ code: 200, data: [{ task_id: 'task1' }] }) : String(url).includes('/v1/tasks/') ?
       json({ code: 200, data: { id: 'task1', status: 'completed', result: { images: [{ url: ['https://images.example.com/image.png'] }] } } }) : new Response(png));
     const service = new ImageService(host, () => ({ ...DEFAULT_IMAGE_SETTINGS, enabled: true }), new PersonaService(host), { fetch: request }); disposables.push(service);
-    const first = await service.generate({ prompt: 'cat', send: true }, exec()); expect(first.delivery).toBe('unknown');
+    const first = await service.generate({ prompt: 'cat', send: true, target: 'c2c:alice' }, exec()); expect(first.delivery).toBe('unknown');
     expect((await service.status(first.id, exec())).delivery).toBe('unknown'); expect(send).toHaveBeenCalledOnce(); expect(request).toHaveBeenCalledTimes(3);
   });
   it('enforces the daily paid-submission budget conservatively', async () => {
@@ -206,7 +206,7 @@ describe('persona and ApiMart image jobs', () => {
     const request = vi.fn<typeof fetch>(async (url, init) => init?.method === 'POST' ? json({ code: 200, data: [{ task_id: 'task1' }] }) : String(url).includes('/v1/tasks/') ?
       json({ code: 200, data: { id: 'task1', status: ready ? 'completed' : 'pending', ...(ready ? { result: { images: [{ url: ['https://images.example.com/image.png'] }] } } : {}) } }) : new Response(png));
     const service = new ImageService(host, () => ({ ...DEFAULT_IMAGE_SETTINGS, enabled: true }), new PersonaService(host), { fetch: request }); disposables.push(service);
-    const pending = await service.generate({ prompt: 'cat', send: true, wait: false }, exec()); ready = true;
+    const pending = await service.generate({ prompt: 'cat', send: true, target: 'c2c:alice', wait: false }, exec()); ready = true;
     await Promise.all([service.status(pending.id, exec()), service.status(pending.id, exec())]);
     expect(send).toHaveBeenCalledOnce(); expect(request.mock.calls.filter(([url]) => String(url).includes('/v1/tasks/'))).toHaveLength(2);
   });

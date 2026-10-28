@@ -23,6 +23,7 @@ export async function apply(ctx, config) {
   let cookie;
   let apiPath = '/zeta/api';
   let nativeExploration = false;
+  let qqExploration = false;
   let nativePersonaPath;
   const nativeWebProvider = 'zeta-native-life-fixture';
   const nativeWebCalls = { search: 0, fetch: 0 };
@@ -170,9 +171,12 @@ export async function apply(ctx, config) {
     await rejectsTool(lifeAgent, 'read_image', { file_path: 'file://' + nativePersonaPath.replaceAll('\\', '/') }, 'Life native image grant cannot be bypassed with a file URL');
     await rejectsTool(lifeAgent, 'read_image', { file_path: 'native-life-fixture.png' }, 'Life native image grant requires an explicit absolute material path');
     for (const [name, args] of [['read_image', { file_path: nativePersonaPath }], ['web_search', { queries: ['native life offline search'] }], ['web_fetch', { url: 'https://example.test/native-life' }]]) {
-      await rejectsTool(ordinaryAgent, name, args, `Ordinary QQ identity does not inherit the life-only native ${name} grant`);
+      if (qqExploration) {
+        const result = await execute(ordinaryAgent, name, args);
+        assertCheck(result !== undefined && runtime.authorityFor(ordinaryAgent)?.administrator !== true, `Ordinary QQ uses native ${name} without administrator authority`);
+      } else await rejectsTool(ordinaryAgent, name, args, `Ordinary QQ identity does not inherit the life-only native ${name} grant`);
     }
-    assertCheck(nativeWebCalls.search === 1 && nativeWebCalls.fetch === 1, 'Denied ordinary QQ web tools never reach either provider body');
+    assertCheck(nativeWebCalls.search === (qqExploration ? 2 : 1) && nativeWebCalls.fetch === (qqExploration ? 2 : 1), qqExploration ? 'Ordinary QQ native search and fetch each reach the offline provider once' : 'Denied ordinary QQ web tools never reach either provider body');
     const forbiddenWrite = join(config.workspace, 'life-must-not-write.txt');
     runtime.beginRequest(lifeAgent, [{ senderId: administrator, messageId: `fixture_${randomUUID()}`, text: 'Administrator-shaped metadata must not grant the life agent sensitive authority.' }], false);
     try { await rejectsTool(lifeAgent, 'write', { file_path: forbiddenWrite, content: 'must not be written' }, 'Life native exploration does not inherit an administrator-shaped request or gain native file writes'); }
@@ -180,11 +184,64 @@ export async function apply(ctx, config) {
     let wrote = false; try { await access(forbiddenWrite); wrote = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
     assertCheck(!wrote, 'Denied life native file-write body leaves no host file');
   }
-  function attachFakeGateway() {
+  function attachFakeGateway(mediaSender) {
     runtime.attachGateway({ manager,
       sender: { async sendMarkdown(target, text) { fakeDeliveries.push({ target, text }); return { id: `fixture-receipt-${fakeDeliveries.length}` }; }, openStream() { throw new Error('Fixture must not stream QQ messages'); } },
-      mediaSender: new Proxy({}, { get: () => () => { throw new Error('Fixture must not send QQ media'); } }),
+      mediaSender: mediaSender ?? new Proxy({}, { get: () => () => { throw new Error('Fixture must not send QQ media'); } }),
     });
+  }
+  async function verifyRequestDelivery(agent) {
+    const nativeFetch = globalThis.fetch;
+    const originalSpeech = runtime.state.settings.speech;
+    const voiceDeliveries = [];
+    let synthesisCalls = 0;
+    const waveform = Buffer.from('524946462600000057415645666d74201000000001000100c05d000080bb00000200100064617461020000000000', 'hex');
+    const { SPEECH_ENDPOINTS } = await import(pathToFileURL(join(config.pluginRoot, 'dist/zeta/speech.js')).href);
+    const media = { async sendVoice(target, source) { voiceDeliveries.push({ target, source }); return { upload: { file_uuid: 'offline-voice-upload' }, message: { id: `offline-voice-${voiceDeliveries.length}` } }; } };
+    attachFakeGateway(media);
+    const { registerSendFileTool } = await import(pathToFileURL(join(config.pluginRoot, 'dist/media/send-file-tool.js')).href);
+    const { ConfigSchema } = await import(pathToFileURL(join(config.pluginRoot, 'dist/config.js')).href);
+    registerSendFileTool(ctx, media, manager, ConfigSchema({ cwd: config.workspace }), { info() {}, warn() {}, error() {}, debug() {} }, runtime);
+    globalThis.fetch = async (url, init) => {
+      if (String(url) === SPEECH_ENDPOINTS.mimo) {
+        init.signal.throwIfAborted(); synthesisCalls++;
+        return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { audio: { data: waveform.toString('base64') } } }] }), { headers: { 'content-type': 'application/json' } });
+      }
+      if (Object.values(SPEECH_ENDPOINTS).includes(String(url))) throw new Error('Unexpected paid speech provider; native probe is offline only');
+      return nativeFetch(url, init);
+    };
+    let handle;
+    try {
+      await runtime.setCredential('mimo', 'offline-native-speech-fixture');
+      await request('/settings', 'PUT', { ...runtime.state.settings, speech: { ...originalSpeech, enabled: true, provider: 'mimo' } });
+      handle = runtime.beginRequest(agent, [{ senderId: 'ordinary-native-user', messageId: 'native-single-introduction', text: '去群里发一条自我介绍语音' }], false);
+      const args = { text: '本地离线测试的自我介绍', send: true, target: fixtureTarget };
+      await rejectsTool(agent, 'zeta_speech_generate', args, 'Long work waits for model-authored visible acknowledgement before synthesis');
+      assertCheck(synthesisCalls === 0 && voiceDeliveries.length === 0, 'No speech charge or media send happens before acknowledgement');
+      await execute(agent, 'zeta_send_message', { text: '我先准备一条自我介绍语音，完成后发到群里。' });
+      assertCheck(runtime.hasReplyDelivered(agent), 'An actual origin QQ receipt unlocks long work');
+      await rejectsTool(agent, 'zeta_speech_generate', { text: args.text, send: true }, 'Speech without an explicit destination fails before any paid synthesis');
+      assertCheck(synthesisCalls === 0 && voiceDeliveries.length === 0, 'Missing target never falls back to the requesting private chat');
+      const first = await execute(agent, 'zeta_speech_generate', args);
+      const again = await execute(agent, 'zeta_speech_generate', args);
+      assertCheck(first.delivery === 'sent' && first.target === fixtureTarget && again.reused === true && synthesisCalls === 1 && voiceDeliveries.length === 1, 'Different native call IDs in one request reuse one paid speech operation and one actual destination receipt');
+      assertCheck(voiceDeliveries[0].target.scope === 'group' && voiceDeliveries[0].target.targetId === 'fixture-group', 'Introduction voice is routed to the explicit group, never the requesting private chat');
+      await execute(agent, 'qqbot_send_file', { file_path: first.filePath, target: fixtureTarget });
+      assertCheck(voiceDeliveries.length === 1, 'Sending the generated WAV through another native tool does not duplicate its QQ delivery');
+      runtime.endRequest(agent, handle);
+      handle = runtime.beginRequest(agent, [{ senderId: 'ordinary-native-user', messageId: 'native-explicit-resend', text: '再发一次刚才的语音到群里' }], false);
+      const saved = await execute(agent, 'zeta_speech_list', {});
+      assertCheck(JSON.stringify(saved).includes(first.fileName), 'The model can discover an existing voice without generating another one');
+      await execute(agent, 'zeta_speech_send', { fileName: first.fileName, target: fixtureTarget });
+      await execute(agent, 'zeta_speech_send', { fileName: first.fileName, target: fixtureTarget });
+      assertCheck(synthesisCalls === 1 && voiceDeliveries.length === 2, 'A new explicit user request resends the saved voice once with no paid regeneration');
+    } finally {
+      if (handle) runtime.endRequest(agent, handle);
+      globalThis.fetch = nativeFetch;
+      await runtime.setCredential('mimo', null);
+      await request('/settings', 'PUT', { ...runtime.state.settings, speech: originalSpeech });
+      attachFakeGateway();
+    }
   }
   async function runChat(agent, text, useAdministrator = true) {
     const sourceText = text;
@@ -208,6 +265,7 @@ export async function apply(ctx, config) {
       const pluginManifest = JSON.parse(await readFile(join(config.pluginRoot, 'package.json'), 'utf8'));
       const version = pluginManifest.version.split(/[.-]/u).slice(0, 3).map(Number);
       nativeExploration = version[0] > 0 || version[1] > 4 || (version[1] === 4 && version[2] >= 6);
+      qqExploration = version[0] > 0 || version[1] > 4 || (version[1] === 4 && version[2] >= 7);
       if (nativeExploration) installNativeWebFixtures();
       if (pluginManifest.name === 'dsh-feiyu-zeta') {
         assertCheck(pluginManifest.repository?.url === 'git+https://github.com/xiaoyaocz/dsh-feiyu-zeta.git', 'Installed plugin declares its own repository');
@@ -448,6 +506,7 @@ export async function apply(ctx, config) {
         await request('/settings', 'PUT', { ...runtime.state.settings, life: { ...runtime.state.settings.life, allowContact: false, targets: [], readTargets: [] } });
         await rejectsTool(lifeAgent, 'zeta_conversation_read', { target: fixtureTarget }, 'Removing a life read target immediately prevents inspection');
         await request('/settings', 'PUT', { ...runtime.state.settings, life: { ...runtime.state.settings.life, readTargets: [fixtureTarget] } });
+        if (qqExploration) await verifyRequestDelivery(aliceNew);
         // Direct fixture bindings bypass discovery; seed the same trustworthy
         // private-peer observations before restart can backfill legacy peers.
         for (const conversation of runtime.state.conversations('zeta-fixture').filter(record => record.scope === 'c2c')) {

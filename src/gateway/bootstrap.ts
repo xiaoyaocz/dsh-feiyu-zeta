@@ -102,7 +102,12 @@ export async function bootstrapGateway(
   logger.info(`QQBot SDK initialized (UA: ${userAgent})`);
 
   // ── 中间件链 ──
-  setupMiddlewares(bot, config, manager, logger, zeta, (scope, peerId) => { if (scope === 'group') groupInbox.cancel(peerId); else privateInbox.cancel(peerId); });
+  setupMiddlewares(bot, config, manager, logger, zeta, (scope, peerId) => {
+    if (scope === 'group') groupInbox.cancel(peerId); else privateInbox.cancel(peerId);
+    const record = manager.getSessionRecord(scope, peerId);
+    record?.abortRequest?.();
+    if (record) outbound.cancel(record.sessionId);
+  });
 
   if (zeta) {
     try {
@@ -164,9 +169,23 @@ export async function bootstrapGateway(
   // 交付物投递：present 声明的文件在轮末发送到当前会话（outbound 路由触发）
   const deliverablesDeliverer = new DeliverablesDeliverer(sender, mediaSender, config, logger, zeta);
 
-  const outbound = createOutboundHandler(manager, sender, config, logger, toolsRegistry, deliverablesDeliverer, record => record.replyTarget.scope !== 'group');
+  const outbound = createOutboundHandler(manager, sender, config, logger, toolsRegistry, deliverablesDeliverer, record => record.replyTarget.scope !== 'group', zeta ? {
+    noteDelivered: (record, text) => zeta.noteReplyDelivered(record.agent, undefined, text, record.requestHandle),
+    hasReplyDelivered: record => zeta.hasReplyDelivered(record.agent),
+    hasDeliveredText: (record, text) => zeta.hasDeliveredText(record.agent, text),
+  } : undefined);
+  manager.waitForReplies = outbound.awaitText;
   (ctx as unknown as { on(event: string, handler: (...args: unknown[]) => void): void })
     .on('session/event', outbound.routeSessionEvent as (...args: unknown[]) => void);
+
+  // Tool guards run after this waterfall. Wait for a committed AI preamble's
+  // real QQ receipt before checking whether long work has been acknowledged.
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    const agent = exec.agent as unknown as { id?: string; session?: { id?: string } } | undefined;
+    const id = agent?.session?.id ?? agent?.id;
+    if (id && manager.findBySessionId(id)) await outbound.awaitText(id, exec.signal);
+    return next();
+  }, { global: true });
 
   // ── 出站流式：agent/assistant-stream → 流式帧路由 ──
   // 实时流式走瞬态 agent/assistant-stream（chunk 不进 session log）。

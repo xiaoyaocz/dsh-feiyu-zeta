@@ -23,11 +23,15 @@ export class DeliverablesDeliverer {
     }
     /** 轮末投递一批声明文件：逐个发送，未送达的聚合为一条文字提示 */
     async deliver(record, files) {
+        record = { ...record, replyTarget: { ...record.replyTarget } };
+        const signal = record.requestSignal ?? new AbortController().signal;
         const limit = Math.max(1, this.config.sendFile?.maxFiles ?? 4);
         const cwd = this.config.cwd || process.cwd();
         const missed = [];
         let sent = 0;
         for (const [index, file] of files.entries()) {
+            if (signal.aborted)
+                return;
             // 新声明记录绝对路径；历史相对路径按插件工作目录兜底解析
             const absPath = isAbsolute(file.path) ? file.path : resolve(cwd, file.path);
             const display = basename(absPath);
@@ -39,11 +43,21 @@ export class DeliverablesDeliverer {
                 missed.push(`${display}（路径不在允许范围）`);
                 continue;
             }
+            if (this.zeta && await this.zeta.hasDeliveredFile(record.agent, absPath)) {
+                if (signal.aborted)
+                    return;
+                this.logger.debug(`im-qqbot: skipping already-delivered file ${display}`);
+                continue;
+            }
+            if (signal.aborted)
+                return;
             const result = this.zeta
-                ? await this.zeta.sendFile(record.agent, absPath, undefined, new AbortController().signal)
+                ? await this.zeta.sendFile(record.agent, absPath, `${record.replyTarget.scope}:${record.replyTarget.targetId}`, signal)
                     .then(value => ({ outcome: 'sent', size: Number(value.size) }))
                     .catch(() => ({ outcome: 'failed', error: '未收到平台确认，或文件不在当前会话允许范围' }))
                 : await sendMediaFile(this.mediaBot, record.replyTarget, absPath);
+            if (signal.aborted)
+                return;
             if (result.outcome === 'sent') {
                 sent++;
                 this.logger.info(`im-qqbot: 交付物已发送 ${display} (${result.size} bytes) → `
@@ -60,6 +74,8 @@ export class DeliverablesDeliverer {
         if (missed.length > 0) {
             const text = ['📎 已生成文件（未能直接发送）：', ...missed.map((name) => `- ${name}`)].join('\n');
             for (const chunk of chunkMarkdownText(text, this.config.textChunkLimit)) {
+                if (signal.aborted)
+                    return;
                 try {
                     await this.sender.sendMarkdown(record.replyTarget, chunk);
                 }

@@ -66,6 +66,8 @@ export class ImageService {
         if (input.referenceUrls !== undefined && (!Array.isArray(input.referenceUrls) || input.referenceUrls.length > 3))
             throw new ServiceError('INVALID_ARGUMENT', '最多提供三张额外公开参考图。');
         input.referenceUrls?.forEach(publicHttpUrl);
+        if (input.send && !input.target)
+            throw new ServiceError('INVALID_ARGUMENT', '发送生成图片必须明确指定会话目录中的target，不会默认发到当前私聊。');
         if (input.target !== undefined && (input.send !== true || typeof input.target !== 'string' || !/^(c2c|group):[^\s:]{1,256}$/u.test(input.target)))
             throw new ServiceError('INVALID_ARGUMENT', '图片发送目标无效。');
         return { ...input, prompt: input.prompt.trim(), selfPortrait: input.selfPortrait === true || /自画像|你自己|你的样子|self[- ]?portrait/iu.test(input.prompt) };
@@ -112,6 +114,8 @@ export class ImageService {
         const owner = scopeFor(this.host, exec.agent);
         const settings = await this.settings();
         const input = this.validate(raw, settings);
+        if (input.send)
+            this.host.validateSendTarget?.(exec.agent, input.target, 'memes');
         await this.options.beforeGenerate?.(input, exec);
         this.host.requireWritable?.();
         if (this.stopped)
@@ -264,11 +268,12 @@ export class ImageService {
                 if (typeof data.cost === 'number' && Number.isFinite(data.cost) && data.cost >= 0)
                     record.cost = data.cost;
                 await atomicJson(this.path(record.owner, record.id), record);
-                if (record.send && record.delivery === 'not_requested' && record.actorKey === materialActorKey(this.host, agent)) {
+                if (record.send && record.target && record.delivery === 'not_requested' && record.actorKey === materialActorKey(this.host, agent)) {
                     serviceAbort(signal);
                     record.delivery = 'pending';
                     await atomicJson(this.path(record.owner, record.id), record);
                     try {
+                        this.host.validateSendTarget?.(agent, record.target, 'memes');
                         const receipt = await this.host.sendFile(agent, filePath, record.target, signal);
                         record.delivery = receipt.outcome === 'failed' || receipt.status === 'failed' ? 'failed' :
                             receipt.outcome === 'sent' || receipt.status === 'accepted' || receipt.status === 'sent' || typeof receipt.messageId === 'string' && !!receipt.messageId ? 'sent' : 'unknown';
@@ -279,7 +284,7 @@ export class ImageService {
                     }
                 }
                 else if (record.send && record.delivery === 'not_requested') {
-                    record.notice = '图片已生成；查询者不是任务发起会话，未自动发送。需要发送时请明确调用发送工具。';
+                    record.notice = record.target ? '图片已生成；查询者不是任务发起会话，未自动发送。需要发送时请明确调用发送工具。' : '图片已生成；旧任务没有明确发送目标，未自动发送。需要发送时请查会话目录并显式指定target。';
                 }
             }
             else if (data.status === 'pending' || data.status === 'processing' || data.status === 'submitted')
@@ -384,7 +389,7 @@ export function registerImageTools(service) {
     registerServiceTool(service.host, { name: 'zeta_image_generate', description: '通过ApiMart生成一张真实图片，默认1K、gemini-nano-banana-2.1-ext，关闭费用不确定的官方回退。画自己/自画像必须selfPortrait=true，会自动引用管理员上传的人设原图。可选发送QQ；返回未完成任务时继续查询原id，不要重复生成。',
         parameters: { type: 'object', properties: {
                 prompt: { type: 'string' }, size: { type: 'string', enum: RATIOS }, selfPortrait: { type: 'boolean' },
-                referenceUrls: { type: 'array', maxItems: 3, items: { type: 'string' } }, send: { type: 'boolean' }, target: { type: 'string' }, wait: { type: 'boolean' },
+                referenceUrls: { type: 'array', maxItems: 3, items: { type: 'string' } }, send: { type: 'boolean' }, target: { type: 'string', description: 'send=true时必填，使用会话目录中的真实target。不会默认发到当前私聊。' }, wait: { type: 'boolean' },
             }, required: ['prompt'], additionalProperties: false }, execute: (input, exec) => service.generate(input, exec) });
     registerServiceTool(service.host, { name: 'zeta_image_status', description: '查询或等待公共库已有的生图任务，不会新建收费任务。历史任务id按原会话迁移映射；查询公共列表中的明确id可用public:<id>。完成后下载图片，只有原任务会话才可执行原任务要求的一次QQ发送。',
         parameters: { type: 'object', properties: { id: { type: 'string' }, wait: { type: 'boolean' } }, required: ['id'], additionalProperties: false },

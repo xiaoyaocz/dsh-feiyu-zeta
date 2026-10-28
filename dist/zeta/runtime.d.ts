@@ -58,12 +58,19 @@ export declare class ZetaRuntime implements ModuleHost {
     private allowsConversation;
     bindRecord(record: SessionRecord): Promise<void>;
     private secureAgent;
-    beginRequest(agent: unknown, sources: readonly RequestSource[], group: boolean): void;
-    endRequest(agent: unknown): void;
+    beginRequest(agent: unknown, sources: readonly RequestSource[], group: boolean, signal?: AbortSignal): string;
+    endRequest(agent: unknown, expectedKey?: string): void;
+    requestKeyFor(agent: unknown): string | undefined;
+    private requestContext;
+    noteReplyDelivered(agent: unknown, target?: string, text?: string, expectedKey?: string): void;
+    hasReplyDelivered(agent: unknown): boolean;
+    hasDeliveredText(agent: unknown, text: string): boolean;
+    hasDeliveredFile(agent: unknown, path: string): Promise<boolean>;
+    private deliverySignal;
     authorityFor(agent: unknown): RequestAuthority | undefined;
     isAdministrator(senderId: string): boolean;
     canApprove(agent: unknown, senderId?: string): boolean;
-    private lifeImageDenial;
+    private imageDenial;
     private denialFor;
     decideGroup(agent: unknown, decision: 'reply' | 'skip'): {
         decision: 'reply' | 'skip';
@@ -93,6 +100,7 @@ export declare class ZetaRuntime implements ModuleHost {
     resolveServiceKey(provider: 'cloudflare' | 'apimart'): Promise<string>;
     setCredential(provider: CredentialProvider, value: string | null): Promise<void>;
     targetFor(agent: unknown, target?: string, kind?: 'text' | 'speech' | 'memes' | 'file'): ConversationBinding;
+    validateSendTarget(agent: unknown, target: string | undefined, kind: 'text' | 'speech' | 'memes' | 'file'): void;
     private effect;
     private serialSend;
     sendText(agent: unknown, text: string, target: string | undefined, signal: AbortSignal): Promise<Record<string, unknown>>;
