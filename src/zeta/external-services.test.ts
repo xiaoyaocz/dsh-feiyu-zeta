@@ -8,6 +8,7 @@ import { PersonaService } from './persona.ts';
 import { DEFAULT_IMAGE_SETTINGS, ImageService } from './images.ts';
 import { DEFAULT_DEPLOYMENT_SETTINGS, DeploymentService, solvePreviewChallenge } from './deployments.ts';
 import type { ModuleExecution } from './contracts.ts';
+import { PUBLIC_SPACE } from './state.ts';
 
 const roots: string[] = [];
 const disposables: Array<{ dispose(): Promise<void> }> = [];
@@ -165,7 +166,7 @@ describe('persona and ApiMart image jobs', () => {
     const restarted = new ImageService(host, settings, persona, { fetch: request }); disposables.push(restarted); status = 'completed';
     expect((await restarted.status(pending.id, exec())).status).toBe('completed');
     expect(request.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
-    await expect(restarted.status(pending.id, exec('b', 'b'))).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect((await restarted.status(pending.id, exec('b', 'b'))).id).toBe(pending.id);
   });
   it('never resubmits an unknown charge and refuses self portraits without a persona', async () => {
     const { host } = await fixture(); const persona = new PersonaService(host);
@@ -192,7 +193,7 @@ describe('persona and ApiMart image jobs', () => {
     expect(request.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
   });
   it('rebuilds generated file paths from the new data root after migration', async () => {
-    const { host } = await fixture(); const id = serviceHash('call1').slice(0, 40); const owner = 'c2c:a';
+    const { host } = await fixture(); const id = serviceHash('call1').slice(0, 40); const owner = PUBLIC_SPACE;
     const directory = join(host.dataDir, 'images', serviceHash(owner).slice(0, 32));
     const { mkdir } = await import('node:fs/promises'); await mkdir(directory, { recursive: true }); await writeFile(join(directory, `${id}.png`), png);
     await writeFile(join(directory, `${id}.json`), JSON.stringify({ version: 1, id, owner, status: 'completed', fingerprint: 'x', mimeType: 'image/png', sha256: serviceHash(png), filePath: 'Z:\\old-machine\\image.png', delivery: 'sent' }));
@@ -269,7 +270,7 @@ describe('Cloudflare temporary static deployments', () => {
     expect((await service.claim(result.id)).claimUrl).toContain('ownership-secret');
     expect((await service.status(result.id, exec())).status).toBe('ready');
     expect((await service.list(exec().agent))).toHaveLength(1);
-    expect((await service.list(exec('b', 'b').agent))).toHaveLength(0);
+    expect((await service.list(exec('b', 'b').agent))).toHaveLength(1);
   });
   it('reuses the same account for iterations and does not create twice on replay', async () => {
     const { host } = await fixture(); const store = secrets(); const mock = provider();
@@ -277,7 +278,7 @@ describe('Cloudflare temporary static deployments', () => {
     const first = await service.deploy(input, exec()); expect((await service.deploy(input, exec())).id).toBe(first.id);
     await service.deploy({ ...input, id: first.id, files: [{ path: 'index.html', content: 'changed' }] }, exec('update'));
     expect(mock.sessions).toBe(1);
-    await expect(service.status(first.id, exec('b', 'b'))).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect((await service.status(first.id, exec('b', 'b'))).id).toBe(first.id);
     expect((await service.remove(first.id, exec())).status).toBe('deleted'); expect(store.map.has(first.id)).toBe(false);
   });
   it('requires accepted terms and blocks paths/config files before any account provisioning', async () => {

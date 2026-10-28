@@ -18,6 +18,9 @@ import { spaceDirectory } from './state.ts';
 
 interface LifeControl { reconcile(): Promise<unknown>; runNow(): Promise<unknown>; stop(): Promise<unknown>; status(): unknown }
 interface RouteHost { register(route: { kind: 'prefix'; path: string; handler(req: IncomingMessage, res: ServerResponse): Promise<void> }): () => void }
+export interface AdministratorCandidate {
+  senderId: string; name?: string; scope?: 'c2c' | 'group'; peerId?: string; lastSeenAt: number; observed: boolean;
+}
 // 80 MiB ZIP encoded as JSON base64, with bounded metadata overhead.
 const MAX_BODY = 112 * 1024 * 1024;
 function json(res: ServerResponse, status: number, value: unknown): void {
@@ -66,11 +69,9 @@ export function registerZetaApi(ctx: Context, runtime: ZetaRuntime, state: ZetaS
         if (origin.host !== req.headers.host) throw new Error('来源校验失败，请从DSH界面操作');
       }
       const data = method === 'GET' || method === 'HEAD' ? {} : await body(req);
-      const requestedSpace = url.searchParams.get('space') || (typeof data.space === 'string' ? data.space : 'self');
-      const ownSpace = runtime.selfSpace;
-      const space = requestedSpace === 'self' ? ownSpace : requestedSpace;
-      const agent = () => runtime.managementAgent(space);
-      const memeAgent = () => runtime.managementAgent(ownSpace);
+      // Legacy clients may still send a space. Management always uses the shared public data.
+      const publicSpace = runtime.selfSpace;
+      const agent = () => runtime.managementAgent();
       const external = () => { if (!services) throw new Error('外部服务尚未就绪'); return services; };
       const publicReference = (reference: Awaited<ReturnType<ZetaServices['persona']['get']>>) => { if (!reference) return undefined; const { filePath: _path, ...value } = reference; return value; };
       const publicImage = (image: Awaited<ReturnType<ZetaServices['images']['generate']>>) => { const { filePath: _path, ...value } = image; return value; };
@@ -131,11 +132,15 @@ export function registerZetaApi(ctx: Context, runtime: ZetaRuntime, state: ZetaS
       if (path === '/deployments/claim' && method === 'GET') { json(res, 200, await external().deployments.claim(text(url.searchParams.get('id'), 160))); return; }
       if (path === '/deployments/status' && method === 'POST') { json(res, 200, { result: await external().deployments.status(text(data.id, 160), { agent: agent(), signal: abort.signal }) }); return; }
       if (path === '/state' && method === 'GET') {
-        const spaces = new Map(state.spaces().map(item => [item.key, item]));
-        for (const binding of state.bindings()) if (!spaces.has(binding.key)) spaces.set(binding.key, { key: binding.key, count: 0, revision: 0 });
-        if (!spaces.has(ownSpace)) spaces.set(ownSpace, { key: ownSpace, count: 0, revision: 0 });
         const credentials = await runtime.credentialStatus();
-        json(res, 200, { version: PLUGIN_VERSION, settings: state.settings, identity: state.identity, credentials, life: life.status(), bindings: state.bindings(), conversations: runtime.conversations(), spaces: [...spaces.values()].toSorted((a, b) => Number(b.key === ownSpace) - Number(a.key === ownSpace)) }); return;
+        const settings = state.settings;
+        const administratorCandidates: AdministratorCandidate[] = state.users(runtime.appId).map(({ appId: _appId, ...user }) => ({ ...user, observed: true }));
+        const observed = new Set(administratorCandidates.map(user => user.senderId));
+        for (const senderId of settings.security.administrators) if (!observed.has(senderId)) {
+          administratorCandidates.push({ senderId, lastSeenAt: 0, observed: false });
+          observed.add(senderId);
+        }
+        json(res, 200, { version: PLUGIN_VERSION, settings, identity: state.identity, administratorCandidates, credentials, life: life.status(), bindings: state.bindings(), conversations: runtime.conversations(), memoryCount: state.listMemory(publicSpace).length }); return;
       }
       if (path === '/conversations' && method === 'GET') { json(res, 200, { items: runtime.conversations() }); return; }
       if (path === '/conversations' && method === 'PATCH') { const item = await state.renameConversation(runtime.appId, text(data.target, 240), text(data.title, 80)); json(res, 200, { item }); return; }
@@ -154,21 +159,21 @@ export function registerZetaApi(ctx: Context, runtime: ZetaRuntime, state: ZetaS
       }
       if (path === '/memory') {
         agent();
-        if (method === 'GET') { json(res, 200, { items: state.listMemory(space, url.searchParams.get('query') || '') }); return; }
-        if (method === 'POST') { const item = await state.setMemory(space, { key: text(data.key, 120), value: text(data.value, 4000), ...(data.tags !== undefined ? { tags: data.tags as string[] } : {}), ...(data.pinned !== undefined ? { pinned: Boolean(data.pinned) } : {}), ...(data.expectedUpdatedAt !== undefined ? { expectedUpdatedAt: text(data.expectedUpdatedAt, 80) } : {}) }); json(res, 200, { item }); return; }
-        if (method === 'DELETE') { json(res, 200, { removed: await state.deleteMemory(space, text(data.key, 120)) }); return; }
+        if (method === 'GET') { json(res, 200, { items: state.listMemory(publicSpace, url.searchParams.get('query') || '') }); return; }
+        if (method === 'POST') { const item = await state.setMemory(publicSpace, { key: text(data.key, 120), value: text(data.value, 4000), ...(data.tags !== undefined ? { tags: data.tags as string[] } : {}), ...(data.pinned !== undefined ? { pinned: Boolean(data.pinned) } : {}), ...(data.expectedUpdatedAt !== undefined ? { expectedUpdatedAt: text(data.expectedUpdatedAt, 80) } : {}) }); json(res, 200, { item }); return; }
+        if (method === 'DELETE') { json(res, 200, { removed: await state.deleteMemory(publicSpace, text(data.key, 120)) }); return; }
       }
       if (path === '/memes') {
-        if (method === 'GET') { json(res, 200, await memes.list(memeAgent(), { query: url.searchParams.get('query') || '', limit: Number(url.searchParams.get('limit') || 24), offset: Number(url.searchParams.get('offset') || 0) })); return; }
-        if (method === 'POST') { json(res, 200, { item: await memes.importImage(memeAgent(), bytes(data.base64), text(data.fileName, 200), { caption: text(data.caption, 1000), tag: typeof data.tag === 'string' ? data.tag : undefined, keywords: Array.isArray(data.keywords) ? data.keywords as string[] : [] }, abort.signal) }); return; }
-        if (method === 'PATCH') { json(res, 200, { item: await memes.update(memeAgent(), text(data.id, 1000), { caption: text(data.caption, 1000), tag: typeof data.tag === 'string' ? data.tag : undefined, keywords: Array.isArray(data.keywords) ? data.keywords as string[] : [] }) }); return; }
-        if (method === 'DELETE') { json(res, 200, { removed: await memes.delete(memeAgent(), text(data.id, 1000)) }); return; }
+        if (method === 'GET') { json(res, 200, await memes.list(agent(), { query: url.searchParams.get('query') || '', limit: Number(url.searchParams.get('limit') || 24), offset: Number(url.searchParams.get('offset') || 0) })); return; }
+        if (method === 'POST') { json(res, 200, { item: await memes.importImage(agent(), bytes(data.base64), text(data.fileName, 200), { caption: text(data.caption, 1000), tag: typeof data.tag === 'string' ? data.tag : undefined, keywords: Array.isArray(data.keywords) ? data.keywords as string[] : [] }, abort.signal) }); return; }
+        if (method === 'PATCH') { json(res, 200, { item: await memes.update(agent(), text(data.id, 1000), { caption: text(data.caption, 1000), tag: typeof data.tag === 'string' ? data.tag : undefined, keywords: Array.isArray(data.keywords) ? data.keywords as string[] : [] }) }); return; }
+        if (method === 'DELETE') { json(res, 200, { removed: await memes.delete(agent(), text(data.id, 1000)) }); return; }
       }
       if (path === '/memes/export' && method === 'GET') {
-        const archive = await memes.exportZip(memeAgent());
+        const archive = await memes.exportZip(agent());
         res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': 'attachment; filename="zeta-memes.zip"', 'cache-control': 'no-store' }); res.end(archive); return;
       }
-      if (path === '/memes/import' && method === 'POST') { json(res, 200, await memes.importZip(memeAgent(), bytes(data.base64), abort.signal)); return; }
+      if (path === '/memes/import' && method === 'POST') { json(res, 200, await memes.importZip(agent(), bytes(data.base64), abort.signal)); return; }
       if (path === '/speech') {
         if (method === 'GET') { const items = await listSpeechFiles(runtime, agent()); json(res, 200, { items: items.map(({ filePath: _filePath, ...item }) => item) }); return; }
         if (method === 'POST') {
@@ -182,7 +187,7 @@ export function registerZetaApi(ctx: Context, runtime: ZetaRuntime, state: ZetaS
         const kind = url.searchParams.get('kind');
         const id = url.searchParams.get('id') || '';
         let file: string;
-        if (kind === 'meme') file = await memes.fileFor(memeAgent(), id);
+        if (kind === 'meme') file = await memes.fileFor(agent(), id);
         else if (kind === 'speech') {
           if (!id || basename(id) !== id) throw new Error('音频标识无效');
           const item = (await listSpeechFiles(runtime, agent(), 100)).find(item => item.fileName === id);

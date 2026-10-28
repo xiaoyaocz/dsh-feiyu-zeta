@@ -2,6 +2,7 @@ import type { Middleware, RawEventContext } from '@tencent-connect/qqbot-nodejs'
 import type { AccessControlConfig } from '../config.ts';
 import type { Logger } from '../types.ts';
 import { cacheMsgId } from '../transport/msgid-cache.ts';
+import type { UserObservation } from './state.ts';
 
 export interface ConversationObservation {
   appId: string;
@@ -14,6 +15,7 @@ export interface ConversationObservation {
 
 export interface ConversationObserver {
   observeConversation(observation: ConversationObservation): Promise<unknown>;
+  observeUser?(observation: UserObservation): Promise<unknown>;
 }
 
 const identifier = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 240 && !/[\s:\u0000]/u.test(value);
@@ -38,6 +40,14 @@ export function conversationDiscovery(appId: string, observer: ConversationObser
           await observer.observeConversation({ appId, scope, peerId, ...(title ? { title } : {}), active: true, seenAt: timestamp(ctx.receivedAt) });
         } catch {
           logger.warn('会话目录更新失败，本次聊天继续处理。');
+        }
+        if (identifier(message.senderId) && observer.observeUser) {
+          try {
+            const name = typeof message.senderName === 'string' ? message.senderName : undefined;
+            await observer.observeUser({ appId, senderId: message.senderId, scope, peerId, seenAt: timestamp(ctx.receivedAt), ...(name ? { name } : {}) });
+          } catch {
+            logger.warn('QQ用户目录更新失败，本次聊天继续处理。');
+          }
         }
       }
     }

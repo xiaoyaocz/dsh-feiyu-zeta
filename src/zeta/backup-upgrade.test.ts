@@ -50,7 +50,10 @@ async function fixture(version: string, inputs: Record<string, Buffer>) {
   const service = new BackupService(ctx, runtime, { dispose: async () => {} } as never); cleanups.push(() => service.dispose());
   const sourceState = await ZetaState.open(testDomainContext());
   await sourceState.updateIdentity({ expected_revision: sourceState.identity.revision, reason: '备份前自主调整', name: '迁移的人设', habits: ['随备份保留的真实习惯'] }, { sourceSessionId: 'source-identity-agent' });
+  await sourceState.observeUser({ appId: 'bot', senderId: 'known-group-user', name: '实际群友', scope: 'group', peerId: 'group-source', seenAt: 123 });
+  await sourceState.observeUser({ appId: 'different-bot', senderId: 'known-other-user', scope: 'c2c', peerId: 'known-other-user', seenAt: 456 });
   const expectedIdentity = sourceState.identity;
+  const expectedUsers = sourceState.users();
   const snapshot: any = await sourceState.snapshot();
   await sourceState.close();
   snapshot.tables.settings.main.life.enabled = true;
@@ -59,6 +62,11 @@ async function fixture(version: string, inputs: Record<string, Buffer>) {
   snapshot.tables.settings.main.images.enabled = true;
   snapshot.tables.settings.main.deployments.enabled = true;
   snapshot.tables.life.main.summary = '保留真实进展';
+  if (['0.3.0', '0.4.0', '0.4.1'].includes(version)) delete snapshot.tables.users;
+  if (version === '0.4.2') {
+    const entry = { key: '旧记忆同名', value: '来自私聊的事实', tags: ['原标签'], pinned: true, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z', sourceSessionId: 'original-memory-source' };
+    snapshot.tables.memories = { 'qq:bot:c2c:legacy': { revision: 7, entries: [entry] }, 'qq:bot:group:legacy': { revision: 4, entries: [{ ...entry, value: '来自群聊的另一事实' }] } };
+  }
   if (version === '0.3.0' || version === '0.4.0') {
     delete snapshot.tables.identity;
     delete snapshot.tables.settings.main.habits;
@@ -93,10 +101,10 @@ async function fixture(version: string, inputs: Record<string, Buffer>) {
   ], archive, 'upgrade-test-password', new AbortController().signal);
   const privateService = service as unknown as PrivateBackup;
   const preview = () => privateService.preview(createReadStream(archive) as unknown as IncomingMessage, 'upgrade-test-password', new AbortController().signal);
-  return { directory, state, privateService, preview, expectedIdentity };
+  return { directory, state, privateService, preview, expectedIdentity, expectedUsers };
 }
 describe('0.4 backup upgrade and new material boundaries', () => {
-  it.each(['0.3.0', '0.4.0'])('previews and restores an encrypted %s archive with additive defaults and no automatic external activity', async version => {
+  it.each(['0.3.0', '0.4.0', '0.4.1', '0.4.2'])('previews and restores an encrypted %s archive with additive defaults and no automatic external activity', async version => {
     const files = { 'data/memes/old-library/image.gif': Buffer.from('legacy exact gif bytes') };
     const f = await fixture(version, files), stage = await f.preview();
     expect(stage.preview.canRestore).toBe(true);
@@ -107,6 +115,13 @@ describe('0.4 backup upgrade and new material boundaries', () => {
     expect(f.state.settings.life.enabled).toBe(false); expect(f.state.settings.life.allowContact).toBe(false);
     expect(f.state.settings.browser.enabled).toBe(false); expect(f.state.settings.images.enabled).toBe(false); expect(f.state.settings.deployments.enabled).toBe(false);
     expect(f.state.settings.security.administrators).toEqual(version === '0.3.0' ? [] : ['trusted-owner-id']);
+    expect(f.state.users()).toEqual(version === '0.4.2' ? f.expectedUsers : []);
+    if (version === '0.4.2') {
+      const memories = f.state.listMemory('any-legacy-space');
+      expect(memories.map(entry => entry.value).sort()).toEqual(['来自私聊的事实', '来自群聊的另一事实'].sort());
+      expect(memories.every(entry => entry.sourceSessionId === 'original-memory-source' && entry.pinned && entry.createdAt === '2026-01-01T00:00:00.000Z')).toBe(true);
+      expect(f.state.spaces()).toHaveLength(1);
+    }
     expect(f.state.life.nextWakeAt).toBeUndefined(); expect(f.state.life.planningInitialized).toBe(false);
     expect(await readFile(join(f.state.migration!.dataRoot, 'memes', 'old-library', 'image.gif'))).toEqual(files['data/memes/old-library/image.gif']);
     expect(restoreSessions).toHaveBeenCalledTimes(1);
@@ -119,6 +134,8 @@ describe('0.4 backup upgrade and new material boundaries', () => {
       'data/images/owner/task.json': Buffer.from('{"status":"completed","taskId":"original-task"}'),
       'data/images/owner/task.png': Buffer.from('generated exact bytes'),
       'data/websites/preview/build/index.html': Buffer.from('<h1>Original preview</h1>'),
+      'data/deployments/preview.json': Buffer.from('{"status":"expired","id":"original-preview"}'),
+      'data/shared-materials/migration.json': Buffer.from('{"version":1,"copied":["original-path"]}'),
       'data/browser/screenshots/owner/screen.png': Buffer.from('screenshot exact bytes'),
     };
     const f = await fixture(PLUGIN_VERSION, files), stage = await f.preview(); expect(stage.preview.canRestore).toBe(true);
@@ -126,6 +143,7 @@ describe('0.4 backup upgrade and new material boundaries', () => {
     for (const [name, expected] of Object.entries(files)) expect(await readFile(join(f.state.migration!.dataRoot, ...name.slice(5).split('/')))).toEqual(expected);
     expect(f.state.settings.security.administrators).toEqual(['trusted-owner-id']);
     expect(f.state.identity).toEqual(f.expectedIdentity);
+    expect(f.state.users()).toEqual(f.expectedUsers);
     expect(f.state.identity.history.at(-1)).toMatchObject({ reason: '备份前自主调整', sourceSessionId: 'source-identity-agent' });
     expect(f.state.life.planRevision).toBe(8); expect(f.state.life.runId).toBeUndefined();
     expect(f.state.settings.browser.enabled || f.state.settings.images.enabled || f.state.settings.deployments.enabled).toBe(false);

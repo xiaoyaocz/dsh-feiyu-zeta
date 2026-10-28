@@ -10,6 +10,7 @@ import { BackupService } from './backup.ts';
 import { registerExternalServices } from './services.ts';
 import { registerSettingsTools } from './settings-tools.ts';
 import { registerIdentityTools } from './identity-tools.ts';
+import { migrateSharedMaterials } from './shared-materials.ts';
 import { getHistoryStore, historyGroupKey } from '../features/history-store.ts';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -26,6 +27,8 @@ export async function createZeta(ctx: Context, appId: string, directory?: string
     }
   }
   const runtime = new ZetaRuntime(ctx, state, appId, directory);
+  try { await migrateSharedMaterials(runtime.dataDir); }
+  catch (error) { await state.close(); throw error; }
   ctx.provide('projectZeta', runtime);
   runtime.install();
   registerIdentityTools(runtime);

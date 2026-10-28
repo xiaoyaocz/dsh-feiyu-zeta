@@ -16,6 +16,7 @@ import { request as httpsRequest } from 'node:https';
 import type { Logger, RawAttachment } from '../types.ts';
 import type { MediaConfig } from '../config.ts';
 import { MEDIA_ROOT } from '../media/media-cleaner.ts';
+import { buildUserAgent } from '../shared/utils.ts';
 
 /** A provider's reported size is not trusted; actual reads are always capped. */
 export const MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024;
@@ -191,7 +192,7 @@ export function requestPinnedAttachment(target: AttachmentTarget, signal: AbortS
   return new Promise((resolve, reject) => {
     const request = (target.url.protocol === 'https:' ? httpsRequest : httpRequest)(target.url, {
       method: 'GET', agent: false, signal, lookup: pinnedAttachmentLookup(target.address),
-      headers: { 'accept-encoding': 'identity', 'user-agent': 'dsh-feiyu-zeta/0.4.1' },
+      headers: { 'accept-encoding': 'identity', 'user-agent': buildUserAgent() },
     }, (response) => resolve({
       status: response.statusCode ?? 500,
       headers: response.headers,

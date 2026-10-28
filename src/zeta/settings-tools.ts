@@ -13,11 +13,11 @@ export function mergeSettingsPatch(current: unknown, patch: unknown, depth = 0):
 export function registerSettingsTools(runtime: ZetaRuntime, reconcile: () => Promise<unknown>, closeBrowser: () => Promise<void>): void {
   const administrator = (agent: unknown): void => {
     const authority = runtime.authorityFor(agent);
-    if (!authority?.administrator || !authority.senderId || !runtime.isAdministrator(authority.senderId)) throw new Error('只有当前真实管理员的 /admin 请求可以读取或修改全局配置');
+    if (!authority?.administrator || !authority.senderId || !runtime.isAdministrator(authority.senderId)) throw new Error('只有当前真实管理员发起的请求可以读取或修改全局配置');
   };
-  registerZetaTool(runtime.ctx, { name: 'zeta_settings_get', description: '管理员读取当前Zeta全局设置（不含密钥）。仅当前管理员明确的/admin请求可调用；先查看实际字段再提交局部修改。', parameters: { type: 'object', properties: {}, additionalProperties: false },
+  registerZetaTool(runtime.ctx, { name: 'zeta_settings_get', description: '读取当前Zeta全局设置（不含密钥）。根据管理员的正常对话请求调用，后台核验真实发送者身份；先查看实际字段再提交局部修改。', parameters: { type: 'object', properties: {}, additionalProperties: false },
     execute: (_args, exec) => { exec.signal.throwIfAborted(); administrator(exec.agent); return { settings: runtime.state.settings }; } });
-  registerZetaTool<{ changes: Record<string, unknown> }>(runtime.ctx, { name: 'zeta_settings_update', description: '管理员局部修改Zeta人设、群聊、记忆、语音、浏览器、生图、部署或自主生活设置。未提供的字段保留，数组整体替换。只在当前真实管理员/admin请求中执行；管理员名单和密钥通过DSH管理页面管理。',
+  registerZetaTool<{ changes: Record<string, unknown> }>(runtime.ctx, { name: 'zeta_settings_update', description: '根据管理员的正常对话请求，局部修改Zeta人设、群聊、记忆、语音、浏览器、生图、部署或自主生活设置。后台核验真实发送者身份；未提供的字段保留，数组整体替换。管理员名单和密钥通过DSH管理页面管理。',
     parameters: { type: 'object', properties: { changes: { type: 'object', additionalProperties: true } }, required: ['changes'], additionalProperties: false },
     execute: async (args, exec) => {
       exec.signal.throwIfAborted(); administrator(exec.agent); runtime.requireWritable();

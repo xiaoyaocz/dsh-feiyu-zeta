@@ -1,10 +1,10 @@
 /** Per-group trailing debounce, bounded from the first message, with serial batches. */
 interface Item<T> { value: T; done(): void }
-interface Inbox<T> { items: Item<T>[]; firstAt: number; lastAt: number; running: boolean; timer?: ReturnType<typeof setTimeout> }
+interface Inbox<T> { items: Item<T>[]; firstAt: number; lastAt: number; running: boolean; timer?: ReturnType<typeof setTimeout>; active?: AbortController }
 export class GroupInbox<T> {
   private readonly groups = new Map<string, Inbox<T>>();
   private disposed = false;
-  constructor(private readonly timing: () => { waitMs: number; maxWaitMs: number }, private readonly process: (values: T[]) => Promise<void>, private readonly onError: (error: unknown) => void = () => {}, private readonly maxPending = 100) {}
+  constructor(private readonly timing: () => { waitMs: number; maxWaitMs: number }, private readonly process: (values: T[], signal: AbortSignal) => Promise<void>, private readonly onError: (error: unknown) => void = () => {}, private readonly maxPending = 100) {}
   enqueue(key: string, value: T): Promise<void> {
     if (this.disposed) return Promise.resolve();
     let group = this.groups.get(key);
@@ -25,12 +25,14 @@ export class GroupInbox<T> {
   private async flush(key: string, group: Inbox<T>): Promise<void> {
     if (this.disposed || group.running || !group.items.length) return;
     group.running = true;
+    group.active = new AbortController();
     const items = group.items.splice(0);
-    try { await this.process(items.map(item => item.value)); }
+    try { await this.process(items.map(item => item.value), group.active.signal); }
     catch (error) { this.onError(error); }
     finally {
       for (const item of items) item.done();
       group.running = false;
+      group.active = undefined;
       if (this.groups.get(key) === group) {
         if (group.items.length) this.schedule(key, group);
         else this.groups.delete(key);
@@ -40,6 +42,7 @@ export class GroupInbox<T> {
   cancel(key: string): void {
     const group = this.groups.get(key);
     if (!group) return;
+    group.active?.abort();
     if (group.timer) clearTimeout(group.timer);
     for (const item of group.items.splice(0)) item.done();
     if (!group.running) this.groups.delete(key);

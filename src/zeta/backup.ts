@@ -22,6 +22,7 @@ import { exportSessions, mappedWorkspace, restoreSessions, validateSessionTransf
 
 const LIMIT = 2 * 1024 * 1024 * 1024;
 const DSH_VERSION = '0.2.1-rc.3';
+const MATERIAL_KINDS = ['memes', 'speech', 'persona', 'images', 'deployments', 'websites', 'browser/screenshots', 'shared-materials'] as const;
 const hash = (value: string | Buffer): string => createHash('sha256').update(value).digest('hex');
 const jsonCopy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const portablePath = z.string().max(8192).refine(value => /^(?:[a-z]:[\\/]|[\\/])/i.test(value) && !/[\u0000-\u001f]/.test(value));
@@ -178,7 +179,7 @@ export class BackupService {
           const entries = await getHistoryStore().list(historyGroupKey(record.appId, record.peerId), 1000);
           if (entries.length) groups.push(jsonCopy({ appId: record.appId, peerId: record.peerId, entries }));
         }
-        for (const kind of ['memes', 'speech', 'persona', 'images', 'websites', 'browser/screenshots']) await this.snapshotFiles(join(this.runtime.dataDir, kind), join(root, 'data', kind), signal);
+        for (const kind of MATERIAL_KINDS) await this.snapshotFiles(join(this.runtime.dataDir, kind), join(root, 'data', kind), signal);
         await this.snapshotFiles(join(this.home, 'zeta', 'qq-media'), join(root, 'qq-media'), signal);
         for (const entry of await this.pluginEntries()) {
           const destination = join(root, 'plugin', ...entry.name.split('/')); await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
@@ -202,12 +203,12 @@ export class BackupService {
     const snapshot = await state.snapshot(); const conflicts: string[] = [];
     const identity = snapshot.tables.identity.main;
     if (identity && (identity.revision > 0 || identity.history.length || JSON.stringify(identity.current) !== JSON.stringify(DEFAULT_IDENTITY))) conflicts.push('目标插件已有自定义身份或调整记录，请使用空插件环境迁移');
-    if (Object.keys(snapshot.tables.bindings).length || Object.keys(snapshot.tables.conversations).length || Object.keys(snapshot.tables.effects).length || Object.values(snapshot.tables.memories).some(space => space.entries.length) || snapshot.tables.life.main?.sessionId) conflicts.push('目标插件已有聊天、记忆或活动数据；请使用新电脑的空插件环境，避免覆盖');
+    if (Object.keys(snapshot.tables.bindings).length || Object.keys(snapshot.tables.conversations).length || Object.keys(snapshot.tables.users).length || Object.keys(snapshot.tables.effects).length || Object.values(snapshot.tables.memories).some(space => space.entries.length) || snapshot.tables.life.main?.sessionId) conflicts.push('目标插件已有聊天、用户目录、记忆或活动数据；请使用新电脑的空插件环境，避免覆盖');
     const prefs = join(this.home, 'zeta', 'qq-model-prefs.json');
     if (await exists(prefs)) { const value = readPreferences(JSON.parse(await readFile(prefs, 'utf8'))); if (Object.keys(value.sessionIds).length || Object.keys(value.overrides).length || Object.keys(value.presets).length) conflicts.push('目标已有QQ会话偏好，请使用空插件环境迁移'); }
-    for (const kind of ['speech', 'memes', 'persona', 'images', 'websites', 'browser/screenshots']) {
+    for (const kind of MATERIAL_KINDS.filter(value => value !== 'shared-materials')) {
       const root = join(this.runtime.dataDir, kind); if (!await exists(root)) continue;
-      if ((await walk(root)).some(file => ['persona', 'images', 'websites'].includes(kind) ? !['usage.json'].includes(file.name) : /\.(?:wav|mp3|png|jpe?g|webp|gif)$/i.test(file.name))) conflicts.push('目标插件已有语音或表情原件，无法直接覆盖恢复');
+      if ((await walk(root)).some(file => ['persona', 'images', 'deployments', 'websites'].includes(kind) ? !['usage.json'].includes(file.name) : /\.(?:wav|mp3|png|jpe?g|webp|gif)$/i.test(file.name))) conflicts.push('目标插件已有语音或表情原件，无法直接覆盖恢复');
     }
     return conflicts;
   }
@@ -233,7 +234,7 @@ export class BackupService {
       if (actual.size !== manifest.files.length) throw new BackupError('迁移包文件清单不一致');
       for (const file of manifest.files) {
         const found = actual.get(file.name);
-        if (!found || found.size !== file.size || found.sha256 !== file.sha256 || !/^(?:plugin\/package\/|data\/(?:memes|speech|persona|images|websites|browser\/screenshots)\/|qq-media\/|sessions\/|attachments\/|qq-prefs\.json$)/.test(file.name)) throw new BackupError('迁移包校验失败，未修改本机数据');
+        if (!found || found.size !== file.size || found.sha256 !== file.sha256 || !/^(?:plugin\/package\/|data\/(?:memes|speech|persona|images|deployments|websites|browser\/screenshots|shared-materials)\/|qq-media\/|sessions\/|attachments\/|qq-prefs\.json$)/.test(file.name)) throw new BackupError('迁移包校验失败，未修改本机数据');
         actual.delete(file.name);
       }
       if (actual.size) throw new BackupError('迁移包包含重复或未声明文件');
@@ -242,7 +243,7 @@ export class BackupService {
       const conflicts = await this.freshConflicts(manifest.id, manifestDigest); const warnings = [...manifest.warnings];
       try { await preflightConfiguration(this.ctx, config, signal); }
       catch { conflicts.push('目标的模型配置、QQ入口或连接凭据存在冲突，请先在DSH设置中处理后重新校验'); }
-      if (![PLUGIN_VERSION, '0.4.0', '0.3.0'].includes(manifest.pluginVersion)) conflicts.push(`迁移包使用插件${manifest.pluginVersion}，请先安装同版本插件后恢复`);
+      if (![PLUGIN_VERSION, '0.4.2', '0.4.1', '0.4.0', '0.3.0'].includes(manifest.pluginVersion)) conflicts.push(`迁移包使用插件${manifest.pluginVersion}，请先安装同版本插件后恢复`);
       for (const preset of manifest.presets) {
         try { if (preset.digest && hash((await this.ctx.agentPresets.readDocument(preset.id)).content) !== preset.digest) conflicts.push(`Agent预设${preset.id}与源电脑不同，请先安装相同预设及所需DSH插件`); else if (preset.missing) warnings.push(`源电脑缺少预设${preset.id}声明，将使用目标电脑已安装的同名预设`); }
         catch { conflicts.push(`目标电脑缺少Agent预设${preset.id}，请先安装对应DSH插件和预设`); }
@@ -306,7 +307,7 @@ export class BackupService {
       await restoreCredentials(this.ctx, stage.config, signal);
       await restoreSessions(this.ctx, stage.plan, signal, { resume });
       await mkdir(dataRoot, { recursive: true, mode: 0o700 });
-      for (const kind of ['memes', 'speech', 'persona', 'images', 'websites', 'browser/screenshots']) await this.snapshotFiles(join(stage.root, 'data', kind), join(dataRoot, kind));
+      for (const kind of MATERIAL_KINDS) await this.snapshotFiles(join(stage.root, 'data', kind), join(dataRoot, kind));
       await this.snapshotFiles(join(stage.root, 'qq-media'), join(this.home, 'zeta', 'qq-media'));
       if (await exists(join(stage.root, 'qq-prefs.json'))) { await mkdir(join(this.home, 'zeta'), { recursive: true }); await copyFile(join(stage.root, 'qq-prefs.json'), join(this.home, 'zeta', 'qq-model-prefs.json')); }
       await this.runtime.state.restoreSnapshot(snapshot);

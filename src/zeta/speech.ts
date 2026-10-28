@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import type { ModuleExecution, ModuleHost, SpeechSettings } from './contracts.ts';
+import { legacyMaterialOwner, materialActorKey, migratedOperationId } from './shared-materials.ts';
 
 export const SPEECH_TOOL_NAME = 'zeta_speech_generate';
 export const SPEECH_ENDPOINTS = {
@@ -71,6 +72,7 @@ export interface SpeechModuleOptions {
 
 interface SpeechManifest {
   version: 1;
+  actorKey?: string;
   fingerprint: string;
   state: 'pending' | 'completed' | 'failed' | 'unknown';
   delivery: 'not_requested' | 'pending' | 'sent' | 'failed' | 'unknown';
@@ -320,7 +322,9 @@ export async function generateSpeech(host: ModuleHost, settings: SpeechSettings,
   const directory = await host.directoryFor(exec.agent, 'speech');
   if (!isAbsolute(directory)) throw new SpeechError('LOCAL_STATE', '语音目录必须是宿主提供的绝对路径。');
   await mkdir(directory, { recursive: true });
-  const operation = digest(exec.callId || randomUUID()).slice(0, 40);
+  const actorKey = materialActorKey(host, exec.agent), callId = exec.callId || randomUUID();
+  const operation = await migratedOperationId(host.dataDir, 'speech', legacyMaterialOwner(host, exec.agent), digest(callId).slice(0, 40)) ?? digest(`${actorKey}:${callId}`).slice(0, 40);
+  cancelled(exec.signal); host.requireWritable?.();
   const fileName = `speech-${operation}.wav`;
   const filePath = join(directory, fileName);
   const manifestPath = join(directory, `speech-${operation}.json`);
@@ -350,7 +354,7 @@ export async function generateSpeech(host: ModuleHost, settings: SpeechSettings,
     catch { throw new SpeechError('NO_CREDENTIAL', '无法读取所选语音服务的密钥。'); }
     if (!apiKey?.trim()) throw new SpeechError('NO_CREDENTIAL', '尚未配置所选语音服务的密钥。');
     cancelled(exec.signal);
-    manifest = { version: 1, fingerprint, state: 'pending', delivery: 'not_requested' };
+    manifest = { version: 1, actorKey, fingerprint, state: 'pending', delivery: 'not_requested' };
     try { await writeFile(manifestPath, JSON.stringify(manifest), { flag: 'wx', mode: 0o600 }); }
     catch { throw new SpeechError('LOCAL_STATE', '语音调用记录已存在或无法写入，未发起请求。'); }
     try {

@@ -23,6 +23,7 @@ const QQ_HABIT = 'migration-fixture-keep-real-experiences';
 const LIFE_HABIT = 'migration-fixture-reflect-before-sharing';
 const QQ_IDENTITY_REASON = 'Ordinary QQ chose a portable native identity';
 const LIFE_IDENTITY_REASON = 'Autonomous life evolved a portable native habit';
+const PORTABLE_ADMIN = 'portable-fixture-administrator';
 const WAVE = Buffer.from('524946462400000057415645666d74201000000001000100805d000000bb0000020010006461746100000000', 'hex');
 const stable = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -139,7 +140,7 @@ export async function apply(ctx, config) {
   async function agent(id) { const found = await ctx.sessionController.resolveAgent(id); assert.ok(found.agent, 'Native Agent must be restorable'); return found.agent; }
   async function chat(target, text, attachmentContent = []) {
     const value = runtime(), binding = value.bindingFor(target);
-    if (binding) value.beginRequest(target, [{ senderId: binding.peerId, messageId: `migration_${randomUUID()}`, text }], binding.scope === 'group');
+    if (binding) value.beginRequest(target, [{ senderId: binding.scope === 'group' ? 'group-member' : binding.peerId, messageId: `migration_${randomUUID()}`, text }], binding.scope === 'group');
     try {
       target.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }, ...attachmentContent] }));
       await target.whenIdle(); await ctx.sessions.flush(target.session);
@@ -182,6 +183,7 @@ export async function apply(ctx, config) {
     const file = await ctx.attachments.saveFile({ data: fileBytes, name: 'migration-note.txt' });
     const qq = await activeManager.getOrCreate('c2c', 'alice', 'alice', { scope: 'c2c', targetId: 'alice', msgId: 'migration-fixture-only' });
     await value.bindRecord(qq);
+    await value.state.observeUser({ appId: APP_ID, senderId: 'alice', name: 'Portable Alice', scope: 'c2c', peerId: 'alice', seenAt: Date.now() - 2000 });
     await chat(qq.agent, `MIGRATION_SEED_ONE: ${'Original fixture conversation. '.repeat(180)}`, [{ type: 'image', attachment: image }, { type: 'file', attachment: file }]);
     check(value.state.settings.name === IDENTITY_NAME && value.state.settings.persona === IDENTITY_PERSONA && value.state.settings.habits.includes(QQ_HABIT), 'Source ordinary QQ native turn independently evolves its shared identity before backup');
     check(value.state.identity.history.at(-1)?.sourceSessionId === qq.sessionId && value.state.identity.history.at(-1)?.reason === QQ_IDENTITY_REASON, 'Source ordinary QQ identity write retains its genuine Session and reason');
@@ -191,6 +193,8 @@ export async function apply(ctx, config) {
     check(compact.ok === true, 'Source native compaction operation completes using the local fixture model');
     const group = await activeManager.getOrCreate('group', 'friends', 'group-member', { scope: 'group', targetId: 'friends', msgId: 'migration-fixture-only' });
     await value.bindRecord(group); await chat(group.agent, 'Migration fixture real group conversation.');
+    await value.state.observeUser({ appId: APP_ID, senderId: 'group-member', name: 'Portable group member', scope: 'group', peerId: 'friends', seenAt: Date.now() - 1000 });
+    await value.state.observeUser({ appId: APP_ID, senderId: PORTABLE_ADMIN, name: 'Portable administrator', scope: 'c2c', peerId: PORTABLE_ADMIN, seenAt: Date.now() - 500 });
     await value.state.renameConversation(APP_ID, 'group:friends', '迁移测试群');
     const groupBuffer = [{ messageId: 'unconsumed-local-migration-message', senderId: 'group-member', senderName: 'Fixture friend', content: 'Pending group context survives computer migration.', timestamp: Date.now() }];
     for (const entry of groupBuffer) await getHistoryStore().append(historyGroupKey(APP_ID, 'friends'), entry, 1000);
@@ -202,7 +206,8 @@ export async function apply(ctx, config) {
     const prefs = new PrefsStore(); const peerKey = `qqbot:${APP_ID}:c2c:alice`;
     prefs.setSessionId(peerKey, child.sessionId); prefs.setPreset(peerKey, (await ctx.agentPresets.resolve()).id);
     const settings = value.state.settings;
-    await value.state.setSettings({ ...settings, speech: { ...settings.speech, enabled: true } });
+    await value.state.setSettings({ ...settings, security: { administrators: [PORTABLE_ADMIN] }, speech: { ...settings.speech, enabled: true } });
+    check(value.state.users(APP_ID).some(user => user.senderId === PORTABLE_ADMIN && user.name === 'Portable administrator'), 'Source administrator is backed by a genuinely observed QQ user record');
     // The public meme endpoint writes the actual collection index and originals.
     const memeResponse = await fetch(`http://127.0.0.1:${config.port}/zeta/api/memes`, { method: 'POST', headers: { cookie: originCookie, 'content-type': 'application/json' }, body: JSON.stringify({ space: `qq:${APP_ID}:c2c:alice`, base64: png().toString('base64'), fileName: 'migration-meme.png', caption: '迁移测试表情', tag: 'migration', keywords: ['fixture'] }), signal: AbortSignal.timeout(15000) });
     assert.equal(memeResponse.status, 200, 'Source meme management API must accept the fixture image'); await memeResponse.body?.cancel();
@@ -240,10 +245,16 @@ export async function apply(ctx, config) {
     for (const session of ctx.sessions.list()) await ctx.sessions.flush(session);
     const sessions = [];
     for (const row of await ctx.sessionPersistence.list()) { const item = await raw(row.header.id); const { events, ...metadata } = item; sessions.push(metadata); }
+    // Direct fixture SessionManager bindings do not run the inbound discovery
+    // listener. Include every trusted private peer, at least as recent as its
+    // conversation, so target startup backfill is an idempotent operation.
+    for (const conversation of value.state.conversations(APP_ID).filter(record => record.scope === 'c2c')) {
+      await value.state.observeUser({ appId: conversation.appId, senderId: conversation.peerId, scope: 'c2c', peerId: conversation.peerId, seenAt: Math.max(Date.now(), conversation.lastSeenAt) });
+    }
     const storedImage = await ctx.attachments.readImage(image);
     const report = { checks: [...checks], modelCalls, fakeTtsCalls, fakeSends, appId: APP_ID, qqSessionId: qq.sessionId, currentSessionId: child.sessionId, groupSessionId: group.sessionId, lifeSessionId: life.id,
       sessions, attachments: [{ kind: 'image', ref: image, sha256: hash(storedImage.data) }, { kind: 'file', ref: file, sha256: hash(fileBytes) }],
-      memories: value.state.listMemory(`qq:${APP_ID}:c2c:alice`), identity: value.state.identity, materials: await materials(value.dataDir), schedules: await scheduleSnapshot(), groupBuffer,
+      memories: value.state.listMemory(`qq:${APP_ID}:c2c:alice`), identity: value.state.identity, users: value.state.users(), administrators: value.state.settings.security.administrators, materials: await materials(value.dataDir), schedules: await scheduleSnapshot(), groupBuffer,
       prefs: JSON.parse(await readFile(join(config.home, 'zeta/qq-model-prefs.json'), 'utf8')), sourceDataDir: value.dataDir, sourceWorkspace: config.workspace };
     check(report.materials.some(item => item.name.endsWith('.wav')) && report.materials.some(item => item.name.endsWith('.png')), 'Source contains real meme and WAV files');
     check(fakeSends === 0 && fakeTtsCalls === 1, 'Source uses only the mock TTS response and makes no QQ deliveries');
@@ -257,6 +268,9 @@ export async function apply(ctx, config) {
     check(value.exportQQConfiguration().zeta?.connectQQ === false && !value.state.settings.life.enabled && !value.state.settings.life.allowContact, 'Restored QQ connection and autonomous contact remain paused');
     check(value.dataDir === migration.dataRoot && value.dataDir !== expected.sourceDataDir, 'Target loads the newly mapped material root after restart');
     assert.deepEqual(value.state.identity, expected.identity, 'The authoritative identity, revision, timestamp and complete audit history must survive encrypted migration and target restart');
+    assert.deepEqual(value.state.users(), expected.users, 'Observed QQ users retain their exact names, source identities and timestamps across encrypted migration and target restart');
+    assert.deepEqual(value.state.settings.security.administrators, expected.administrators, 'The administrator selection survives migration without dropping observed-user metadata');
+    check(value.state.users(APP_ID).some(user => user.senderId === PORTABLE_ADMIN && user.name === 'Portable administrator') && value.state.settings.security.administrators.includes(PORTABLE_ADMIN), 'Target administrator selection remains linked to the migrated observed-user directory');
     check(value.state.settings.name === expected.identity.name && value.state.settings.persona === expected.identity.persona && stable(value.state.settings.habits) === stable(expected.identity.habits), 'Target settings expose exactly the migrated QQ and life-authored identity while all external work stays paused');
     check(value.state.identity.history.some(item => item.reason === QQ_IDENTITY_REASON && item.sourceSessionId === expected.qqSessionId) && value.state.identity.history.some(item => item.reason === LIFE_IDENTITY_REASON && item.sourceSessionId === expected.lifeSessionId), 'Both ordinary QQ and autonomous identity audit records retain their original native Session identities');
     for (const expectedSession of expected.sessions) {

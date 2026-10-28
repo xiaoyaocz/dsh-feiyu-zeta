@@ -11,12 +11,25 @@ export interface RequestAuthority {
   senderId?: string;
 }
 
-const ADMIN_REQUEST = /^\/admin(?:\s+)(\S[\s\S]*)$/iu;
 export function requestAuthority(appId: string, sources: readonly RequestSource[], administrators: readonly string[]): RequestAuthority {
   const saved = sources.map(source => Object.freeze({ ...source }));
   const senderId = saved[0]?.senderId;
-  const administrator = !!senderId && administrators.includes(senderId) && saved.every(source => source.senderId === senderId && ADMIN_REQUEST.test(source.text.trim()));
+  const administrator = !!senderId && administrators.includes(senderId) && saved.every(source => source.senderId === senderId);
   return Object.freeze({ appId, sources: Object.freeze(saved), administrator, ...(senderId ? { senderId } : {}) });
+}
+
+/** Keep ordinary group chat batched while giving each administrator their own request. */
+export function splitRequestBatches<T>(items: readonly T[], senderFor: (item: T) => string, isAdministrator: (senderId: string) => boolean): T[][] {
+  const batches: T[][] = [];
+  let previousAdministrator: string | undefined;
+  for (const item of items) {
+    const senderId = senderFor(item);
+    const administrator = isAdministrator(senderId) ? senderId : undefined;
+    if (!batches.length || administrator !== previousAdministrator) batches.push([]);
+    batches[batches.length - 1]!.push(item);
+    previousAdministrator = administrator;
+  }
+  return batches;
 }
 
 /** An allowlist also fails closed for new third-party host/configuration tools. */
@@ -33,6 +46,6 @@ const BUSINESS_TOOLS = new Set([
 const OUTGOING_TOOLS = new Set(['zeta_send_message', 'send_meme', 'qqbot_send_file', 'ask_user_question']);
 export function toolDenial(name: string, authority: RequestAuthority | undefined, groupDecision?: 'undecided' | 'reply' | 'skip'): string | undefined {
   if (groupDecision !== undefined && groupDecision !== 'reply' && (OUTGOING_TOOLS.has(name) || name === 'zeta_speech_generate')) return '群聊本轮尚未决定回复；请先调用 zeta_group_decide，沉默时不会发送任何QQ消息。';
-  if (!authority?.administrator && !BUSINESS_TOOLS.has(name)) return '此宿主操作仅允许配置名单内的管理员通过当前消息明确使用 /admin 指令执行；自主活动和普通聊天没有此权限。';
+  if (!authority?.administrator && !BUSINESS_TOOLS.has(name)) return '此操作仅允许配置名单内的管理员发起；当前消息的真实发送者没有管理员权限。';
   return undefined;
 }

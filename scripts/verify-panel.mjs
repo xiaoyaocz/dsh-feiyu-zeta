@@ -37,7 +37,7 @@ const bundle = await rolldown({ input: path.join(root, 'scripts/fixtures/panel-e
 const built = await bundle.generate({ format: 'iife' }); await bundle.close();
 const code = built.output.find(value => value.type === 'chunk').code;
 const settings = {
-  name: '离线测试伙伴', persona: '认真交流，喜欢绘画。', habits: [], security: { administrators: [] }, group: { waitMs: 2000, maxWaitMs: 6000 },
+  name: '离线测试伙伴', persona: '认真交流，喜欢绘画。', habits: [], security: { administrators: ['legacy-owner'] }, group: { waitMs: 2000, maxWaitMs: 6000 },
   browser: { enabled: false, accountId: '', maxConcurrent: 1, maxSessionMs: 120000, idleTimeoutMs: 15000, dailyBudgetMs: 600000, actionTimeoutMs: 20000 },
   images: { enabled: false, model: 'gemini-nano-banana-2.1-ext', resolution: '1K', timeoutMs: 30000, pollIntervalMs: 4000, maxWaitMs: 300000, maxPromptCharacters: 8000, maxImageBytes: 20971520, dailyLimit: 10 },
   deployments: { enabled: false, acceptedTerms: false, maxFiles: 1000, maxFileBytes: 5242880, maxTotalBytes: 26214400, timeoutMs: 60000, maxActive: 3 },
@@ -46,7 +46,17 @@ const settings = {
   life: { enabled: false, intervalMinutes: 60, minIntervalMinutes: 5, maxDailyRuns: 48, timeZone: 'Asia/Shanghai', quietStart: 23, quietEnd: 8, targets: [], readTargets: [], allowContact: false, allowMemes: true, allowSpeech: false, dailyContactLimit: 3, contactCooldownMinutes: 180, interests: '绘画和观察世界' },
 };
 const binding = { key: 'qq:fixture:group:friends', appId: 'fixture', scope: 'group', peerId: 'friends', sessionId: 'friends-session', title: '朋友群' };
-const fixture = { version: `${manifest.version}-fixture`, settings, credentials: { mimo: false, minimax: false, cloudflare: false, apimart: false }, life: { status: 'idle', summary: '正在研究新的画法', focus: '人物设计', nextWakeAt: Date.now() + 30 * 60000, nextWakeReason: '半小时后继续创作', lastRunAt: 0, lastFinishedAt: 0, contactCount: 0 }, bindings: [binding], conversations: [{ ...binding, target: 'group:friends', active: true, lastSeenAt: Date.now() }], spaces: [] };
+const fixture = { version: `${manifest.version}-fixture`, settings, credentials: { mimo: false, minimax: false, cloudflare: false, apimart: false }, life: { status: 'idle', summary: '正在研究新的画法', focus: '人物设计', nextWakeAt: Date.now() + 30 * 60000, nextWakeReason: '半小时后继续创作', lastRunAt: 0, lastFinishedAt: 0, contactCount: 0 }, bindings: [binding], conversations: [{ ...binding, target: 'group:friends', active: true, lastSeenAt: Date.now() }], memoryCount: 2 };
+let memories = ['私聊里约好的绘画', '群聊里发现的新兴趣'].map((key, index) => ({ key, value: `已合并到公共记忆的内容 ${index + 1}`, tags: ['共同经历'], pinned: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }));
+const speeches = ['私聊的问候', '群聊的收获'].map((voice, index) => ({ provider: 'mimo', model: 'mimo-v2.5-tts', voice, fileName: `speech-${String(index + 1).repeat(40)}.wav`, bytes: 46, characters: 6, createdAt: new Date().toISOString(), generation: 'completed', delivery: 'not_requested' }));
+const wav = Buffer.from('524946462600000057415645666d74201000000001000100c05d000080bb00000200100064617461020000000000', 'hex');
+const observedCandidates = [
+  { senderId: 'owner-a', name: '小明', scope: 'c2c', peerId: 'owner-a', lastSeenAt: Date.now(), observed: true },
+  { senderId: 'owner-b', name: '小雨', scope: 'group', peerId: 'friends', lastSeenAt: Date.now() - 1, observed: true },
+  { senderId: 'owner-a', name: '旧昵称', scope: 'group', peerId: 'friends', lastSeenAt: Date.now() - 1000, observed: true },
+];
+const legacyCandidate = { senderId: 'legacy-owner', lastSeenAt: 0, observed: false };
+fixture.administratorCandidates = [...structuredClone(observedCandidates), legacyCandidate];
 fixture.identity = { revision: 1, updatedAt: new Date().toISOString(), history: [] };
 const defaultIdentity = { name: '小鲸鱼', persona: '以社区二创的蓝色鲸鱼娘气质为起点，温柔、好奇，也有自己的生活。', habits: ['先听完连续的消息，再决定是否回应。', '只把实际发生的事情记录为自己的经历。'] };
 const identityFields = value => ({ name: value.name, persona: value.persona, habits: [...value.habits] });
@@ -73,6 +83,7 @@ const server = createServer(async (req, res) => {
     const route = url.pathname.slice('/zeta/api'.length);
     records.push({ path: route, method: req.method, ...(route === '/credential' ? { provider: data.provider, value: data.value === null ? null : '[redacted]' } : { body: route === '/backup/export' ? { ...data, password: '[redacted]' } : data }), query: url.search, ...(req.headers['x-zeta-identity-revision'] ? { identityRevision: req.headers['x-zeta-identity-revision'] } : {}) });
     let value;
+    if (route === '/media' && url.searchParams.get('kind') === 'speech') { res.setHeader('content-type', 'audio/wav'); res.end(wav); return; }
     if (['/persona/image', '/images/media', '/media'].includes(route)) { res.setHeader('content-type', 'image/png'); res.end(png); return; }
     if (route === '/state') value = fixture;
     else if (route === '/settings') {
@@ -96,7 +107,13 @@ const server = createServer(async (req, res) => {
     else if (route === '/deployments/claim') { assert.equal(url.searchParams.get('id'), 'preview-1'); value = { claimUrl: 'https://claim-fixture.example/secret-owner-token' }; }
     else if (route === '/deployments') { if (req.method === 'DELETE') deployments = deployments.filter(item => item.id !== data.id); value = { items: deployments }; }
     else if (route === '/memes') value = { items: [{ id: 'builtin:fish', caption: '快乐的大肥鱼', tag: 'happy', keywords: ['高兴'], fileName: 'fish.png', builtin: true }, { id: 'collection:smile', caption: '共享的微笑表情', tag: 'happy', keywords: ['微笑'], fileName: 'smile.png', builtin: false }], total: 2, hasMore: false };
-    else if (route === '/memory' || route === '/speech') value = { items: [] };
+    else if (route === '/memory') {
+      if (req.method === 'POST') { const item = { ...data, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; memories = [...memories.filter(value => value.key !== item.key), item]; value = { item }; }
+      else if (req.method === 'DELETE') { memories = memories.filter(item => item.key !== data.key); value = { removed: true }; }
+      else value = { items: memories };
+      fixture.memoryCount = memories.length;
+    }
+    else if (route === '/speech') value = { items: speeches };
     else if (route === '/life/run') value = { queued: true };
     else if (route === '/life/stop') { fixture.settings.life.enabled = false; value = { stopped: true }; }
     else if (route === '/backup/status') value = { restartRequired: false, canActivate: false, maintenance: false, pendingRestore: false };
@@ -125,7 +142,7 @@ try {
   }), 'base64'); persona.bytes = png.length;
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => route.request().url().startsWith(origin) || route.request().url().startsWith('blob:') ? route.continue() : route.abort());
-  const tab = async name => { await page.getByRole('tab', { name, exact: true }).click(); await page.getByRole('tabpanel').waitFor(); };
+  const tab = async name => { await page.getByRole('tab', { name, exact: true }).click(); await page.getByRole('tabpanel').waitFor(); assert.equal(await page.getByLabel('当前管理空间').count(), 0, `${name} has no management-space selector`); };
   const capture = async name => { await page.screenshot({ path: path.join(output, name), fullPage: true }); };
   const save = async () => { const count = saves.length; await Promise.all([page.waitForResponse(response => response.url().endsWith('/zeta/api/settings') && response.request().method() === 'PUT' && response.status() === 200), page.getByRole('button', { name: '保存设置', exact: true }).click()]); await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === '保存设置' && button.disabled)); check(saves.length === count + 1, 'settings save sends exactly one request'); };
   await page.goto(origin); await page.getByRole('tab', { name: '管理员与群聊', exact: true }).waitFor();
@@ -134,7 +151,26 @@ try {
   check(await page.getByText(`${pluginName} ${fixture.version}`, { exact: true }).count() === 1, 'settings footer shows the new brand and current package version');
   for (const language of ['zh', 'en']) { const locale = JSON.parse(await readFile(path.join(root, 'locale', `${language}.json`), 'utf8')); check(locale.meta.title === pluginName && locale.meta.description.includes(pluginName), `${language} plugin card metadata uses the new brand`); }
   check(await page.getByRole('tab').count() === 10, 'ten settings tabs are mounted from real source');
-  await tab('管理员与群聊'); await page.getByLabel('管理员发送者标识').fill('owner-a\nowner-b\nowner-a');
+  check(await page.getByText('公共记忆', { exact: true }).count() === 1 && await page.getByText('2 条', { exact: true }).count() === 1, 'overview reads the public memoryCount without any spaces summary');
+  await tab('记忆'); await page.getByText('私聊里约好的绘画', { exact: true }).waitFor(); await page.getByText('群聊里发现的新兴趣', { exact: true }).waitFor();
+  check(await page.getByRole('article').count() === 2, 'one public memory list displays records from both private and group conversations');
+  const memoryForm = page.locator('form').filter({ has: page.getByRole('heading', { name: '添加记忆', exact: true }) });
+  await memoryForm.getByLabel(/^名称/).fill('所有对话的新约定'); await memoryForm.getByLabel('内容', { exact: true }).fill('周末一起创作');
+  await memoryForm.getByRole('button', { name: '添加记忆', exact: true }).click(); await page.getByText('记忆已保存。', { exact: true }).waitFor();
+  check(memories.length === 3 && records.filter(item => item.path === '/memory' && item.method === 'POST').at(-1).body.key === '所有对话的新约定', 'adding public memory sends the record without selecting a conversation');
+  await capture('desktop-memory.png');
+  await tab('语音'); await page.getByText('MiMo · 私聊的问候', { exact: true }).waitFor(); await page.getByText('MiMo · 群聊的收获', { exact: true }).waitFor();
+  check(await page.getByRole('button', { name: '试听', exact: true }).count() === 2, 'shared speech gallery keeps records from multiple conversations visible together');
+  await page.getByRole('button', { name: '试听', exact: true }).first().click(); await page.getByLabel('MiMo语音试听').waitFor();
+  check(records.some(item => item.path === '/media' && new URLSearchParams(item.query).get('kind') === 'speech'), 'public speech preview loads its shared audio file'); await capture('desktop-speech.png');
+  await tab('管理员与群聊');
+  check(await page.getByLabel('管理员发送者标识').count() === 0 && !(await page.locator('body').innerText()).includes('/admin'), 'administrator management removes manual IDs and command-prefix instructions');
+  check(await page.getByRole('list', { name: '当前管理员', exact: true }).getByRole('listitem').filter({ hasText: '已保留原来的管理员设置' }).count() === 1, 'existing administrator without a directory entry remains visible and selected');
+  const chooseAdministrator = page.getByLabel('添加管理员');
+  check(await chooseAdministrator.locator('option[value="owner-a"]').count() === 1 && await chooseAdministrator.locator('option[value="legacy-owner"]').count() === 0, 'candidate list deduplicates real senders and excludes unobserved saved-only identities');
+  await chooseAdministrator.selectOption('owner-a'); await page.getByRole('button', { name: '添加为管理员', exact: true }).click();
+  await chooseAdministrator.selectOption('owner-b'); await page.getByRole('button', { name: '添加为管理员', exact: true }).click();
+  check(await page.getByRole('list', { name: '当前管理员', exact: true }).getByRole('listitem').count() === 3 && await chooseAdministrator.isDisabled(), 'choosing known users adds them once and prevents duplicate additions');
   await page.getByLabel('收到最后一条后等待（毫秒）').fill('2500'); await page.getByLabel('连续消息最多等待（毫秒）').fill('7000');
   await tab('人设'); check(await page.getByLabel('名字', { exact: true }).inputValue() === '离线测试伙伴', 'existing handwritten identity is not automatically replaced');
   await page.getByLabel('名字', { exact: true }).fill('尚未保存的人设名'); await page.getByLabel('日常习惯').fill('听完连续消息再回应\n做完探索记录真实收获');
@@ -147,7 +183,8 @@ try {
   check(await apimart.getByLabel('密钥').inputValue() === '', 'credential field clears even when saving fails');
   await apimart.getByLabel('密钥').fill('fixture-apimart-secret'); await apimart.getByRole('button', { name: '保存密钥', exact: true }).click(); await page.getByText('ApiMart API Key 已保存。', { exact: true }).waitFor();
   check(await apimart.getByLabel('密钥').inputValue() === '', 'apimart credential field clears after saving');
-  await tab('管理员与群聊'); check(await page.getByLabel('管理员发送者标识').inputValue() === 'owner-a\nowner-b', 'credential state refresh preserves unsaved administrator draft');
+  await tab('管理员与群聊'); const selectedAdministrators = page.getByRole('list', { name: '当前管理员', exact: true });
+  check(await selectedAdministrators.getByRole('listitem').count() === 3 && await selectedAdministrators.getByText('小明', { exact: true }).count() === 1 && await selectedAdministrators.getByText('小雨', { exact: true }).count() === 1, 'credential state refresh preserves chosen users and legacy administrator draft');
   check(await page.getByLabel('收到最后一条后等待（毫秒）').inputValue() === '2500', 'credential state refresh preserves unsaved group wait');
   await tab('人设'); check(await page.getByLabel('名字', { exact: true }).inputValue() === '尚未保存的人设名', 'switching tabs and refreshing credentials preserves persona draft');
   check(await page.getByLabel('日常习惯').inputValue() === '听完连续消息再回应\n做完探索记录真实收获', 'credential refresh also preserves the unsaved habits draft');
@@ -156,7 +193,7 @@ try {
   await page.getByLabel('启用图片生成', { exact: true }).check(); check(await page.getByLabel('默认画质').inputValue() === '1K', 'image generation default is 1K');
   await page.getByLabel('启用临时网页部署').check(); await page.getByLabel('我已阅读并接受 Cloudflare 服务条款与隐私政策', { exact: true }).check();
   await save(); const saved = saves.at(-1);
-  check(JSON.stringify(saved.security.administrators) === JSON.stringify(['owner-a', 'owner-b']) && saved.group.waitMs === 2500 && saved.group.maxWaitMs === 7000, 'saved settings include deduplicated administrators and precise group wait fields');
+  check(JSON.stringify(saved.security.administrators) === JSON.stringify(['legacy-owner', 'owner-a', 'owner-b']) && saved.group.waitMs === 2500 && saved.group.maxWaitMs === 7000, 'saved settings retain the legacy administrator and store selected real sender IDs');
   check(saved.browser.maxSessionMs === 180000 && saved.browser.dailyBudgetMs === 300000 && saved.browser.accountId === 'fixture-account', 'browser settings convert seconds/minutes to millisecond API fields');
   check(saved.name === '尚未保存的人设名' && saved.images.model === 'gemini-nano-banana-2.1-ext' && saved.images.resolution === '1K' && saved.deployments.acceptedTerms, 'one save preserves persona draft, fixed model and terms setting');
   check(JSON.stringify(saved.habits) === JSON.stringify(['听完连续消息再回应', '做完探索记录真实收获']), 'settings request includes structured daily habits');
@@ -179,9 +216,11 @@ try {
   check(persona.description === '蓝裙白发的角色', 'persona description uses separate PATCH without overwriting other settings');
   await page.getByRole('button', { name: '从图片生成描述', exact: true }).click(); await page.getByText('已根据人设图更新外貌描述。', { exact: true }).waitFor();
   check(await page.getByLabel('外貌描述').inputValue() === '白发、蓝眼、蓝色连衣裙', 'visual description refresh loads the real API result'); await capture('desktop-persona.png');
-  await tab('外部服务'); await page.getByLabel('当前管理空间').selectOption(binding.key); await tab('表情');
-  await page.getByText('共享的微笑表情', { exact: true }).waitFor(); check(await page.getByLabel('当前管理空间').count() === 0, 'shared meme tab removes the space selector');
-  check(records.filter(item => item.path === '/memes').every(item => new URLSearchParams(item.query).get('space') === 'self'), 'meme library requests stay global after selecting another space'); await capture('desktop-memes.png');
+  await tab('记忆'); await page.getByText('所有对话的新约定', { exact: true }).waitFor();
+  check(await page.getByRole('article').count() === 3, 'returning to public memory retains all merged and newly created records');
+  await tab('表情'); await page.getByText('共享的微笑表情', { exact: true }).waitFor();
+  check(await page.getByLabel('当前管理空间').count() === 0, 'shared meme gallery uses the same public interface');
+  check(records.filter(item => item.path === '/memes').every(item => !new URLSearchParams(item.query).has('space')), 'meme library requests no longer include a space parameter'); await capture('desktop-memes.png');
   await tab('自主生活'); check(await page.getByText('下次活动：', { exact: false }).count() > 0 && await page.getByText('半小时后继续创作', { exact: false }).count() > 0, 'autonomous panel displays AI-selected next activity and reason');
   check(await page.getByLabel('活动间隔（分钟）', { exact: true }).count() === 0, 'autonomous panel has no fixed activity interval editor');
   await page.getByLabel('最短活动间隔（分钟）').fill('7'); await page.getByLabel('每日自主活动上限').fill('12'); await page.getByLabel('开启自主生活').check(); await save();
@@ -215,7 +254,18 @@ try {
   check(await page.getByRole('button', { name: '保存设置', exact: true }).isDisabled(), 'more than thirty habits disables saving before network submission');
   await page.getByLabel('日常习惯').fill('习'.repeat(301)); check(await page.getByRole('button', { name: '保存设置', exact: true }).isDisabled(), 'a habit longer than three hundred characters disables saving');
   await page.getByLabel('日常习惯').fill(defaultIdentity.habits.join('\n')); await capture('desktop-identity.png');
-  await tab('管理员与群聊'); await capture('desktop-security.png');
+  await tab('管理员与群聊'); await page.getByRole('button', { name: '移除管理员 小雨', exact: true }).click(); await save();
+  check(JSON.stringify(saves.at(-1).security.administrators) === JSON.stringify(['legacy-owner', 'owner-a']), 'removing a selected user saves only the remaining administrator IDs');
+  fixture.administratorCandidates = [legacyCandidate]; await page.getByRole('button', { name: '刷新可选用户', exact: true }).click(); await page.getByText('可选用户已刷新。', { exact: true }).waitFor();
+  await page.getByText('还没有可选用户。请让对方先给机器人发一条消息，再刷新。', { exact: true }).waitFor();
+  check(await page.getByLabel('添加管理员').isDisabled() && await page.getByRole('list', { name: '当前管理员', exact: true }).getByRole('listitem').count() === 2, 'empty observed directory disables adding and preserves all existing administrators');
+  await capture('desktop-admin-empty.png');
+  const legacyRow = page.getByRole('list', { name: '当前管理员', exact: true }).getByRole('listitem').filter({ hasText: `…${legacyCandidate.senderId.slice(-8)}` });
+  await legacyRow.getByRole('button', { name: /^移除管理员 / }).click(); await save();
+  check(JSON.stringify(saves.at(-1).security.administrators) === JSON.stringify(['owner-a']), 'a saved-only administrator can be explicitly removed without manual ID entry');
+  fixture.administratorCandidates = structuredClone(observedCandidates); await page.getByRole('button', { name: '刷新可选用户', exact: true }).click(); await page.getByText('可选用户已刷新。', { exact: true }).waitFor();
+  check(await page.getByLabel('添加管理员').locator('option[value="owner-b"]').count() === 1, 'refresh discovers eligible users again after the directory is repopulated');
+  await capture('desktop-security.png');
   await tab('备份迁移'); const pluginDownload = page.waitForEvent('download'); await page.getByRole('button', { name: '下载本版本插件', exact: true }).click();
   check((await pluginDownload).suggestedFilename() === `${pluginName}-plugin.tgz`, 'plugin package download uses the renamed brand prefix');
   await page.getByLabel('设置备份密码').fill('offline-brand-check-only'); await page.getByLabel('再次输入备份密码').fill('offline-brand-check-only');
@@ -224,7 +274,8 @@ try {
   await page.getByText('加密备份已生成并开始下载，请保存好备份文件和密码。', { exact: true }).waitFor();
   check(await page.getByLabel('设置备份密码').inputValue() === '' && await page.getByLabel('再次输入备份密码').inputValue() === '', 'branding download fixture leaves backup password fields empty'); await capture('desktop-backup-brand.png');
   await page.setViewportSize({ width: 390, height: 844 });
-  for (const name of ['管理员与群聊', '外部服务', '人设', '自主生活', '表情', '备份迁移']) { await tab(name); await page.waitForTimeout(80); const layout = await page.evaluate(() => ({ width: innerWidth, body: document.documentElement.scrollWidth })); overflows.push({ tab: name, ...layout }); check(layout.body <= layout.width, `390px ${name} has no horizontal page overflow`); await capture(`mobile-${name}.png`); }
+  for (const name of ['概览', '记忆', '语音', '会话', '管理员与群聊', '外部服务', '人设', '自主生活', '表情', '备份迁移']) { await tab(name); await page.waitForTimeout(80); const layout = await page.evaluate(() => ({ width: innerWidth, body: document.documentElement.scrollWidth })); overflows.push({ tab: name, ...layout }); check(layout.body <= layout.width, `390px ${name} has no horizontal page overflow`); await capture(`mobile-${name}.png`); }
+  check(records.every(item => !new URLSearchParams(item.query).has('space') && !Object.hasOwn(item.body ?? {}, 'space')), 'every management API request omits obsolete space query and body parameters');
   check(await page.evaluate(() => JSON.stringify(localStorage) === '{}' && JSON.stringify(sessionStorage) === '{}'), 'credentials and claim links are not persisted in browser storage');
   check(errors.length === 0, 'zero browser or fixture exceptions');
   await writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: true, checks, requests: records, overflows, browser: browserPath || 'bundled chromium', fixture: 'offline owner API; no paid services/accounts' }, null, 2));

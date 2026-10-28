@@ -11,6 +11,7 @@ import { ZetaRuntime } from './runtime.ts';
 import { PersonaService } from './persona.ts';
 import { registerZetaApi } from './api.ts';
 import type { ZetaServices } from './services.ts';
+import { SPEECH_ENDPOINTS } from './speech.ts';
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
@@ -26,13 +27,14 @@ async function fixture() {
   }) as unknown as Context;
   const state = await ZetaState.open(ctx); cleanup.push(() => state.close());
   const runtime = new ZetaRuntime(ctx, state, 'bot', root);
-  const persona = new PersonaService(runtime); const actor = runtime.managementAgent(runtime.selfSpace);
+  const persona = new PersonaService(runtime); const actor = runtime.managementAgent();
   const imageRoot = join(root, 'images', spaceDirectory(runtime.spaceFor(actor))); await mkdir(imageRoot, { recursive: true });
   const id = 'b'.repeat(40); const imagePath = join(imageRoot, `${id}.png`); await writeFile(imagePath, Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001', 'hex'));
   const image = { id, status: 'completed', model: 'gemini-nano-banana-2.1-ext', resolution: '1K', selfPortrait: false, createdAt: new Date().toISOString(), delivery: 'not_requested', filePath: imagePath, mimeType: 'image/png', bytes: 24 };
   const browser = { status: vi.fn(async () => ({ active: 0, usedMsToday: 123, cleanupPending: 0 })), quiesce: vi.fn(async () => {}), recover: vi.fn(async () => {}) };
   const images = { list: vi.fn(async (agent: unknown) => runtime.spaceFor(agent) === runtime.selfSpace ? [image] : []), generate: vi.fn(async () => image), status: vi.fn(async () => image) };
-  const deployments = { list: vi.fn(async () => []), remove: vi.fn(async () => ({ status: 'deleted' })), claim: vi.fn(async () => ({ claimUrl: 'https://dash.cloudflare.com/claim-preview?claimToken=fixture-secret', expiresAt: new Date().toISOString() })) };
+  const page = { id: 'shared-page', status: 'ready', previewUrl: 'https://example.test/shared', createdAt: new Date().toISOString(), expiresAt: new Date().toISOString() };
+  const deployments = { list: vi.fn(async () => [page]), status: vi.fn(async () => page), remove: vi.fn(async () => ({ status: 'deleted' })), claim: vi.fn(async () => ({ claimUrl: 'https://dash.cloudflare.com/claim-preview?claimToken=fixture-secret', expiresAt: new Date().toISOString() })) };
   const services = { persona, browser, images, deployments } as unknown as ZetaServices;
   const memes = { list: vi.fn(async (agent: unknown) => ({ items: [], actor: runtime.spaceFor(agent) })) };
   registerZetaApi(ctx, runtime, state, memes as never, { reconcile: async () => {}, runNow: async () => {}, stop: async () => {}, status: () => ({ status: 'disabled' }) }, undefined, services);
@@ -44,6 +46,23 @@ async function fixture() {
 }
 
 describe('external-service management routes', () => {
+  it('returns current-bot observed QQ users plus saved-only administrators without inventing an origin', async () => {
+    const { call, state } = await fixture();
+    await state.observeUser({ appId: 'bot', senderId: 'group-member', name: '群友甲', scope: 'group', peerId: 'group-a', seenAt: 100 });
+    await state.observeUser({ appId: 'bot', senderId: 'private-user', scope: 'c2c', peerId: 'private-user', seenAt: 200 });
+    await state.observeUser({ appId: 'other-bot', senderId: 'foreign-user', name: '别的机器人', scope: 'c2c', peerId: 'foreign-user', seenAt: 300 });
+    await state.setSettings({ ...state.settings, security: { administrators: ['group-member', 'legacy-only-id'] } });
+    const view = await (await call('/state')).json();
+    expect(view.administratorCandidates).toEqual([
+      { senderId: 'private-user', scope: 'c2c', peerId: 'private-user', lastSeenAt: 200, observed: true },
+      { senderId: 'group-member', name: '群友甲', scope: 'group', peerId: 'group-a', lastSeenAt: 100, observed: true },
+      { senderId: 'legacy-only-id', lastSeenAt: 0, observed: false },
+    ]);
+    expect(JSON.stringify(view.administratorCandidates)).not.toContain('foreign-user');
+    expect(view.settings.security.administrators).toEqual(['group-member', 'legacy-only-id']);
+    expect((await call('/state', 'GET', undefined, '')).status).toBe(401);
+    expect((await call('/state', 'GET', undefined, 'no')).status).toBe(403);
+  });
   it('rejects untrusted callers before they can change settings, close browsers or reveal claim credentials', async () => {
     const { call, browser, deployments, state } = await fixture();
     expect((await call('/browser/close', 'POST', {}, '')).status).toBe(401);
@@ -57,16 +76,21 @@ describe('external-service management routes', () => {
     expect([...credentials.values()]).toContain(secret);
     const response = await call('/state'); const text = await response.text(); expect(text).not.toContain(secret); expect(JSON.parse(text).credentials.apimart).toBe(true);
   });
-  it('keeps image previews private, scopes gallery reads, and never sends a management-page generation to QQ', async () => {
-    const { call, images, state, image } = await fixture();
+  it('keeps shared image previews private and never sends a management-page generation to QQ', async () => {
+    const { call, images, state, runtime, image } = await fixture();
+    const sendFile = vi.spyOn(runtime, 'sendFile'); const sendText = vi.spyOn(runtime, 'sendText');
     const list = await (await call('/images')).json(); expect(list.items[0].filePath).toBeUndefined();
     const response = await call(`/images/media?id=${image.id}`); expect(response.status).toBe(200); expect(response.headers.get('content-type')).toBe('image/png');
     await state.bind({ appId: 'bot', scope: 'c2c', peerId: 'a', key: 'qq:bot:c2c:a', sessionId: 'a' });
-    expect((await call(`/images/media?id=${image.id}&space=${encodeURIComponent('qq:bot:c2c:a')}`)).status).toBe(400);
-    expect((await call('/images', 'POST', { prompt: '星空', send: true, target: 'group:secret' })).status).toBe(200);
+    const legacyPreview = await call(`/images/media?id=${image.id}&space=${encodeURIComponent('qq:bot:c2c:a')}`);
+    expect(legacyPreview.status).toBe(200); expect(Buffer.from(await legacyPreview.arrayBuffer())).toEqual(Buffer.from(await response.arrayBuffer()));
+    expect((await (await call('/images?space=unknown-legacy-space')).json()).items).toEqual(list.items);
+    expect((await call('/images', 'POST', { space: 'unknown-legacy-space', prompt: '星空', send: true, target: 'group:secret' })).status).toBe(200);
     expect(images.generate.mock.calls[0]?.[0]).toMatchObject({ prompt: '星空', send: false });
+    expect(runtime.spaceFor(images.generate.mock.calls[0]?.[1].agent)).toBe(runtime.selfSpace);
+    expect(sendFile).not.toHaveBeenCalled(); expect(sendText).not.toHaveBeenCalled();
   });
-  it('saves a verified persona image and provides the same shared library regardless of selected memory space', async () => {
+  it('saves a verified persona image and ignores obsolete space selectors for the shared library', async () => {
     const { call, services } = await fixture();
     const png = Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001', 'hex');
     const uploaded = await (await call('/persona', 'POST', { fileName: 'self.png', base64: png.toString('base64'), description: '蓝色的小鱼' })).json();
@@ -74,6 +98,52 @@ describe('external-service management routes', () => {
     expect(services.persona.contextText()).toContain('蓝色的小鱼');
     const image = await call(`/persona/image?id=${uploaded.reference.id}`); expect(Buffer.from(await image.arrayBuffer())).toEqual(png);
     expect((await (await call('/memes?space=unknown-legacy-space')).json()).actor).toBe('self:zeta');
+  });
+  it('uses one public memory store across legacy query and body selectors without losing the conversation directory', async () => {
+    const { call, state, runtime } = await fixture();
+    await state.bind({ appId: 'bot', scope: 'group', peerId: 'friends', key: 'qq:bot:group:friends', sessionId: 'friends-session' });
+    const first = await (await call('/memory?space=qq:bot:c2c:a', 'POST', { space: 'unrecognized-old-space', key: '共同约定', value: '周末一起画画', tags: ['创作'] })).json();
+    expect(first.item.key).toBe('共同约定');
+    for (const path of ['/memory', '/memory?space=self', '/memory?space=qq:bot:group:friends', '/memory?space=unknown']) {
+      expect((await (await call(path)).json()).items).toEqual([first.item]);
+    }
+    const updated = await (await call('/memory?space=unrelated', 'POST', { space: 'qq:bot:group:friends', key: first.item.key, value: '周日下午一起画画', expectedUpdatedAt: first.item.updatedAt })).json();
+    expect(state.listMemory(runtime.selfSpace)).toEqual([updated.item]);
+    const view = await (await call('/state?space=unknown')).json();
+    expect(view.memoryCount).toBe(1); expect(view.spaces).toBeUndefined(); expect(view.bindings).toHaveLength(1); expect(view.conversations[0].target).toBe('group:friends');
+    expect((await (await call('/memory?space=old-third-space', 'DELETE', { space: 'another', key: first.item.key })).json()).removed).toBe(true);
+    expect((await (await call('/memory')).json()).items).toEqual([]);
+  });
+  it('shares webpage records and actions even when old clients still send different space selectors', async () => {
+    const { call, runtime, deployments } = await fixture();
+    const expected = (await (await call('/deployments')).json()).items;
+    expect((await (await call('/deployments?space=qq:bot:c2c:a')).json()).items).toEqual(expected);
+    expect((await call('/deployments/status?space=old-a', 'POST', { space: 'old-b', id: 'shared-page' })).status).toBe(200);
+    expect((await call('/deployments?space=old-c', 'DELETE', { space: 'old-d', id: 'shared-page' })).status).toBe(200);
+    for (const action of [deployments.list, deployments.status, deployments.remove]) for (const args of action.mock.calls) {
+      const actor = action === deployments.list ? args[0] : args[1].agent;
+      expect(runtime.spaceFor(actor)).toBe(runtime.selfSpace);
+    }
+  });
+  it('generates and serves one shared speech record while ignoring old send and space fields', async () => {
+    const { call, state, runtime } = await fixture();
+    await state.setSettings({ ...state.settings, speech: { ...state.settings.speech, enabled: true } });
+    const key = vi.spyOn(runtime, 'resolveApiKey').mockResolvedValue('offline-fixture-key');
+    const sendFile = vi.spyOn(runtime, 'sendFile'); const sendText = vi.spyOn(runtime, 'sendText');
+    const wav = Buffer.from('RIFF0000WAVEoffline'); const realFetch = globalThis.fetch;
+    const provider = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      if (String(url) === SPEECH_ENDPOINTS.mimo) return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { audio: { data: wav.toString('base64') } } }] }), { headers: { 'content-type': 'application/json' } });
+      if (!String(url).startsWith('http://127.0.0.1:')) throw new Error('No external requests in this fixture');
+      return realFetch(url, options);
+    });
+    try {
+      const response = await call('/speech?space=old-a', 'POST', { space: 'old-b', text: '共享的问候', send: true, target: 'group:secret' });
+      const generated = await response.json(); expect(response.status).toBe(200); expect(generated.result.delivery).toBe('not_requested'); expect(generated.result.filePath).toBeUndefined();
+      for (const path of ['/speech', '/speech?space=qq:bot:group:friends', '/speech?space=unknown']) expect((await (await call(path)).json()).items).toEqual([generated.result]);
+      const media = await call(`/media?kind=speech&id=${generated.result.fileName}&space=unknown`);
+      expect(media.status).toBe(200); expect(Buffer.from(await media.arrayBuffer())).toEqual(wav);
+      expect(sendFile).not.toHaveBeenCalled(); expect(sendText).not.toHaveBeenCalled();
+    } finally { provider.mockRestore(); key.mockRestore(); }
   });
   it('reports unresolved remote cleanup instead of claiming the browser has closed', async () => {
     const { call, browser } = await fixture(); browser.status.mockResolvedValue({ active: 0, usedMsToday: 123, cleanupPending: 1 });

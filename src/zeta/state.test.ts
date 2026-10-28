@@ -3,15 +3,17 @@ import { testDomainContext } from './test-support.ts';
 import { defaultSettings, qqMemorySpace, ZetaState } from './state.ts';
 
 describe('DSH-backed Zeta memory state', () => {
-  it('keeps concurrent writes in one space and never crosses QQ scopes', async () => {
+  it('keeps concurrent writes in one public memory while retaining real QQ route identities', async () => {
     const state = await ZetaState.open(testDomainContext());
     const alice = qqMemorySpace('bot', 'c2c', 'alice');
     const group = qqMemorySpace('bot', 'group', 'alice');
     await Promise.all(Array.from({ length: 12 }, (_, i) => state.setMemory(alice, { key: `fact${i}`, value: `喜欢${i}` })));
     expect(state.listMemory(alice)).toHaveLength(12);
-    expect(state.listMemory(group)).toEqual([]);
+    expect(state.listMemory(group)).toHaveLength(12);
     await state.setMemory(group, { key: 'culture', value: '群里喜欢简短回复' });
-    expect(state.listMemory(alice, '简短')).toEqual([]);
+    expect(state.listMemory(alice, '简短')[0]?.value).toBe('群里喜欢简短回复');
+    expect(state.spaces()).toEqual([{ key: 'self:zeta', count: 13, revision: 13 }]);
+    expect(alice).not.toBe(group);
     await state.close();
   });
   it('updates stable facts, rejects stale edits, deletes and bounds injection', async () => {

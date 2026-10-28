@@ -48,7 +48,7 @@ describe('complete plugin migration lifecycle', () => {
     release(); await expect(operation).resolves.toBe('complete');
     expect(() => runtime.requireWritable()).not.toThrow();
   });
-  it('rechecks conflicts after maintenance drains a writer that committed after the initial check', async () => {
+  it.each(['memory', 'user'] as const)('rechecks conflicts after maintenance drains a %s writer that committed after the initial check', async kind => {
     const base = await realpath(tmpdir()); const temporary = await mkdtemp(join(base, 'zeta-backup-conflict-'));
     vi.stubEnv('DSH_HOME', temporary);
     cleanup.push(async () => {
@@ -67,14 +67,18 @@ describe('complete plugin migration lifecycle', () => {
       // A normal UI write has passed requireWritable before the maintenance
       // gate opens. Its storage commit completes while maintenance drains it.
       const finish = runtime.beginWriteOperation(controller);
-      const writer = state.setMemory('self:zeta', { key: 'arrived-during-restore', value: '必须保留的并发写入' }).finally(finish);
+      const writer = (kind === 'memory'
+        ? state.setMemory('self:zeta', { key: 'arrived-during-restore', value: '必须保留的并发写入' })
+        : state.observeUser({ appId: 'bot', senderId: 'new-member', scope: 'group', peerId: 'group', seenAt: 123 })).finally(finish);
       const result = original(work, lockAfter); await writer;
       return result;
     });
     const stage = { token: randomUUID(), createdAt: Date.now(), preview: { canRestore: true }, manifestDigest: 'fixture-digest', manifest: { id: randomUUID(), state: await state.snapshot() } };
-    await expect((service as unknown as { restore(stage: unknown): Promise<unknown> }).restore(stage)).rejects.toThrow('目标插件已有聊天、记忆或活动数据');
+    await expect((service as unknown as { restore(stage: unknown): Promise<unknown> }).restore(stage)).rejects.toThrow('目标插件已有聊天、用户目录、记忆或活动数据');
     expect(controller.signal.aborted).toBe(true); expect(migrationWrite).not.toHaveBeenCalled(); expect(memesDispose).not.toHaveBeenCalled();
-    expect(state.migration).toBeUndefined(); expect(state.listMemory('self:zeta')).toMatchObject([{ key: 'arrived-during-restore', value: '必须保留的并发写入' }]);
+    expect(state.migration).toBeUndefined();
+    if (kind === 'memory') expect(state.listMemory('self:zeta')).toMatchObject([{ key: 'arrived-during-restore', value: '必须保留的并发写入' }]);
+    else expect(state.users('bot')).toMatchObject([{ senderId: 'new-member', scope: 'group', lastSeenAt: 123 }]);
     expect(() => runtime.requireWritable()).not.toThrow();
   });
   it('rejects a signalled Agent waiter after a successful restore requests restart', async () => {

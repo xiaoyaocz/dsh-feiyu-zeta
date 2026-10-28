@@ -4,7 +4,21 @@
 
 This file records this personal testing and self-use experiment. The inherited dsh-qqbot changelog is no longer presented as this project's release history; source and copyright notices remain in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
-## 0.4.1 — current
+## 0.4.3 — current
+
+- Remove the management-space selector and share memory, speech, generated images and temporary webpage records in one library.
+- Merge older partitions without overwriting conflicts or repeating paid submissions or QQ deliveries; retain original files and task identifiers.
+- Preserve real QQ routes, administrator checks and per-task browser cleanup.
+- Include shared-library migration receipts and deployment records in backups, with compatibility for 0.4.2 and earlier supported versions.
+
+## 0.4.2
+
+- Select administrators from observed QQ users in a dropdown, with display names and sources; no manual ID entry. Previously saved users not yet re-observed remain marked and preserved.
+- Accept natural-language administrator requests and verify the real sender and current administrator list when each sensitive tool executes, without a command prefix.
+- Separate group turns by sender authority so ordinary members cannot inherit administrator rights through message batching; mixed-source requests remain denied.
+- Persist the observed-user directory and include it in encrypted migration, with compatibility for older backups lacking that table.
+
+## 0.4.1
 
 - Rename the project and package to `dsh-feiyu-zeta`, repository `xiaoyaocz/dsh-feiyu-zeta`. Installation uses a local archive, not a published npm package.
 - Introduce the independently rewritten **小鲸鱼** default persona; preserve customized older identities.

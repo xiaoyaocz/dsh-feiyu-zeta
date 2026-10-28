@@ -29,6 +29,7 @@ import { DeliverablesDeliverer } from '../transport/deliverables.ts';
 import type { ZetaRuntime } from '../zeta/runtime.ts';
 import { observeGroupLifecycle } from '../zeta/discovery.ts';
 import { GroupInbox } from '../transport/group-inbox.ts';
+import { splitRequestBatches } from '../zeta/permissions.ts';
 
 /**
  * interaction 统一分发器：按 button_data 的顶层 `t` 判别字段，路由到对应
@@ -55,20 +56,31 @@ export async function bootstrapGateway(
   const manager = new SessionManager(ctx, agents, config, logger);
   const groupInbox = new GroupInbox<MiddlewareContext>(
     () => zeta?.state.settings.group ?? { waitMs: 2000, maxWaitMs: 6000 },
-    async batch => {
+    async (batch, signal) => {
+      const abort = (): void => { for (const item of batch) item.abort('group:cancelled'); };
+      signal.addEventListener('abort', abort, { once: true });
       const watchdog = config.processingTimeoutMs > 0 ? setTimeout(() => { for (const item of batch) item.abort('group:processing-timeout'); }, config.processingTimeoutMs) : undefined;
-      try { if (batch[0]) await handleInbound(batch[0], manager, config, logger, zeta, batch); }
-      finally { if (watchdog) clearTimeout(watchdog); }
+      try {
+        const requests = splitRequestBatches(batch, item => item.message.senderId, senderId => zeta?.isAdministrator(senderId) ?? false);
+        const excludeIds = new Set(batch.map(item => item.message.messageId));
+        for (const [index, request] of requests.entries()) {
+          if (signal.aborted) break;
+          if (request[0] && !request.some(item => item.signal.aborted)) await handleInbound(request[0], manager, config, logger, zeta, request, { excludeIds, include: index === 0 });
+        }
+      }
+      finally { signal.removeEventListener('abort', abort); if (watchdog) clearTimeout(watchdog); }
     },
     error => logger.error(`Group batch failed: ${error instanceof Error ? error.message : String(error)}`),
     config.maxQueue,
   );
   const privateInbox = new GroupInbox<MiddlewareContext>(
     () => ({ waitMs: 0, maxWaitMs: 0 }),
-    async batch => {
+    async (batch, signal) => {
+      const abort = (): void => { for (const item of batch) item.abort('private:cancelled'); };
+      signal.addEventListener('abort', abort, { once: true });
       const watchdog = config.processingTimeoutMs > 0 ? setTimeout(() => { for (const item of batch) item.abort('private:processing-timeout'); }, config.processingTimeoutMs) : undefined;
-      try { if (batch[0]) await handleInbound(batch[0], manager, config, logger, zeta, batch); }
-      finally { if (watchdog) clearTimeout(watchdog); }
+      try { if (!signal.aborted && batch[0]) await handleInbound(batch[0], manager, config, logger, zeta, batch); }
+      finally { signal.removeEventListener('abort', abort); if (watchdog) clearTimeout(watchdog); }
     },
     error => logger.error(`Private batch failed: ${error instanceof Error ? error.message : String(error)}`),
     config.maxQueue,

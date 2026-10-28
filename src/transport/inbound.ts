@@ -93,6 +93,7 @@ export async function handleInbound(
   logger: Logger,
   zeta?: ZetaRuntime,
   batch: MiddlewareContext[] = [ctx],
+  history: { excludeIds?: ReadonlySet<string>; include?: boolean } = {},
 ): Promise<void> {
   await zeta?.waitForMaintenance();
   const msg = ctx.message as unknown as ProcessedMessage;
@@ -109,9 +110,9 @@ export async function handleInbound(
 
   // ── 组装 agentBody（下载结果经 mwState.downloadedFiles 提供） ──
   const messages = batch.map(item => ({ message: item.message as unknown as ProcessedMessage, state: item.state as MiddlewareState }));
-  const batchIds = new Set(messages.map(item => item.message.messageId));
+  const batchIds = new Set([...history.excludeIds ?? [], ...messages.map(item => item.message.messageId)]);
   const agentBody = messages.map(({ message, state }, index) => {
-    const filtered = { ...state, history: index === 0 ? state.history?.filter(entry => !batchIds.has(entry.messageId)) : [] };
+    const filtered = { ...state, history: index === 0 && history.include !== false ? state.history?.filter(entry => !batchIds.has(entry.messageId)) : [] };
     const body = assembleAgentBody(message, filtered, scope, logger);
     return body && scope === 'group' ? `[消息 ${message.messageId} · ${message.timestamp}]\n${body}` : body;
   }).filter(Boolean).join('\n\n');

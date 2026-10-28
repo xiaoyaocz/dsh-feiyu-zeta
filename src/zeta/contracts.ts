@@ -51,6 +51,8 @@ export interface ModuleHost {
   readonly dataDir: string;
   requireWritable?(): void;
   bindingFor(agent: unknown): ConversationBinding | undefined;
+  /** Trusted actors share one library; optional for existing module adapters. */
+  spaceFor?(agent: unknown): string;
   isLifeAgent(agent: unknown): boolean;
   directoryFor(agent: unknown, kind: 'speech' | 'memes'): Promise<string>;
   sendFile(agent: unknown, absolutePath: string, target: string | undefined, signal: AbortSignal): Promise<Record<string, unknown>>;

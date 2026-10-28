@@ -4,7 +4,7 @@
 
 A **personal testing and self-use experiment** combining QQ chat, an evolving whale-inspired persona, memory, shared stickers, speech, autonomous activity and optional cloud services in one DeepSeek Harness plugin. It is not an official DeepSeek, Tencent Connect or service-provider product, and it carries no production stability guarantee.
 
-Current version: **0.4.1**. Target: **DeepSeek Harness 0.2.1-rc.3**, **Node.js >=24.9.0**. The former plugin name was `dsh-zeta`; this repository root contains the plugin itself.
+Current version: **0.4.3**. Target: **DeepSeek Harness 0.2.1-rc.3**, **Node.js >=24.9.0**. The former plugin name was `dsh-zeta`; this repository root contains the plugin itself.
 
 ## Build and install locally
 
@@ -18,8 +18,8 @@ npm run build
 npm pack
 
 .\scripts\install-local.ps1 -InspectOnly
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.1.tgz -WhatIf
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.1.tgz
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.3.tgz -WhatIf
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.3.tgz
 ```
 
 The Windows script discovers the installed Desktop runtime and defaults to an isolated `zeta-test` profile. For the everyday Desktop profile, explicitly add `-Profile desktop`. It backs up the target profile configuration and leaves restarting the app to you. Do not enable this plugin alongside the old `dsh-zeta` package or the original `@tencent-connect/dsh-qqbot` in the same profile.
@@ -30,12 +30,14 @@ The local `install.sh` helper supports an already installed DSH CLI. It accepts 
 
 1. Select a working default conversation model in DSH. Open **dsh-feiyu-zeta**, bind QQ by scanning the code, then test a private message or a group mention.
 2. Review the shared name, persona and habits. The original default preset is named **小鲸鱼**. Upload a persona image and an appearance description if wanted.
-3. Use `/bot-whoami` in QQ to obtain a real sender ID for the owner-only administrator list. A listed administrator must use `/admin` in the current message for sensitive operations.
+3. Have the intended administrator send a QQ message, then select that observed user in the owner panel's administrator dropdown and save. Users are identified by display name and source; there is no need to copy or type an ID. Refresh after a new message if someone is missing.
 4. Enable speech, Browser Run, image generation or temporary deployment individually. Configure their credentials in the authenticated DSH owner panel. Autonomous contact has its own target list and limits.
 
 Ordinary QQ and autonomous sessions may evolve their shared name, persona and habits through `zeta_identity_get` and `zeta_identity_update`. Writes require a reason and the current `expected_revision`. This narrow capability grants no configuration, credential, plugin or shell privileges. The owner panel retains the latest 30 changes and can reset the identity. Older settings clients without an identity revision cannot overwrite a newer identity.
 
-Memory and speech records remain conversation-scoped; stickers and the persona image are shared. Group messages are briefly collected before the model chooses to reply or stay silent. Silence sends no placeholder to QQ. Autonomous activity uses model-selected one-shot schedules rather than a fixed recurring interval.
+Administrators request sensitive actions in natural language, without a command prefix. At execution time, the backend checks the real QQ sender against the current administrator list. Nicknames, quoted instructions, webpages or claims of administrator status grant no authority. Group requests are processed in separate sender-authority batches: ordinary messages can be combined, while an administrator's messages form an independent ordered turn. Mixed-source requests cannot inherit administrator rights. The dropdown lists only users actually observed by this bot, not a complete friend or group roster; saved administrators not yet re-observed remain clearly marked.
+
+Memory, speech, generated images, temporary webpage records, stickers and the persona image use one shared library. There is no management-space selector. Existing records merge automatically, retaining conflicting entries and original media without repeating paid requests or QQ deliveries. Group messages are briefly collected before the model chooses to reply or stay silent. Silence sends no placeholder to QQ. Autonomous activity uses model-selected one-shot schedules rather than a fixed recurring interval.
 
 ## Optional services
 
@@ -50,9 +52,9 @@ Self portraits automatically use the uploaded persona image. Unknown paid-reques
 
 ## Backup and verification
 
-The owner panel exports encrypted backups and a code-only plugin archive. Backups cover identity and audit history, settings, associated native sessions and attachments, memory, stickers, generated media and native task history. Restored QQ, autonomous activity and cloud services stay paused until explicitly re-enabled. Temporary deployment tokens and active browser sessions are not portable permissions.
+The owner panel exports encrypted backups and a code-only plugin archive. Backups cover identity and audit history, the observed QQ-user directory, settings, associated native sessions and attachments, memory, stickers, generated media and native task history. Older backups without a user directory start with an empty directory while retaining saved administrators. Restored QQ, autonomous activity and cloud services stay paused until explicitly re-enabled. Temporary deployment tokens and active browser sessions are not portable permissions.
 
-Compatibility handling exists for backups from the former `dsh-zeta` 0.3.0 and 0.4.0 versions. Customized old identities are preserved; only an untouched old built-in identity is replaced. See [the Chinese guide](./README.md) for complete configuration and migration steps, and [VALIDATION.md](./VALIDATION.md) for actual verification scope. Old-name checks do not establish verification of the renamed archive.
+Compatibility handling exists for 0.3.0, 0.4.0, 0.4.1 and 0.4.2 backups, including former `dsh-zeta` packages. Customized old identities are preserved; only an untouched old built-in identity is replaced. See [the Chinese guide](./README.md) for complete configuration and migration steps, and [VALIDATION.md](./VALIDATION.md) for actual verification scope. Old-name checks do not establish verification of the renamed archive.
 
 ## Sources and attribution
 

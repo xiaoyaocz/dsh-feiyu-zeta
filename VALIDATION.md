@@ -1,12 +1,54 @@
 # dsh-feiyu-zeta 验证范围与记录
 
-当前项目：[xiaoyaocz/dsh-feiyu-zeta](https://github.com/xiaoyaocz/dsh-feiyu-zeta)，版本 `0.4.1`。目标宿主为 DeepSeek Harness `0.2.1-rc.3`，Node.js `>=24.9.0`。
+当前项目：[xiaoyaocz/dsh-feiyu-zeta](https://github.com/xiaoyaocz/dsh-feiyu-zeta)，版本 `0.4.3`。目标宿主为 DeepSeek Harness `0.2.1-rc.3`，Node.js `>=24.9.0`。
 
 这是个人测试、自用实验项目。验证用于说明实际检查过的行为，不是生产稳定性承诺。更名前的旧包结果与更名后的新包结果分别记录。
 
-## 更名后的本轮验证
+## 0.4.3 公共资料库验证
 
-本轮已在更名后的独立插件目录重新安装依赖、构建 `dsh-feiyu-zeta-0.4.1.tgz` 并验证；以下是新包的实际结果。
+本轮移除管理空间选择，所有聊天和自主生活共用公共记忆、语音、图片、网页与表情资料。以下针对新构建的 `dsh-feiyu-zeta-0.4.3.tgz`：
+
+| 检查 | 可复跑命令 | 本轮结果 |
+| --- | --- | --- |
+| 宿主与客户端类型检查 | `npm run check` | 通过 |
+| 离线单元与协议测试 | `npm test` | 41 个文件、506 项通过 |
+| 构建和归档 | `npm run build`、`npm pack --ignore-scripts` | 通过 |
+| 浏览器设置页 | `node scripts/verify-panel.mjs` | 83 项检查、80 次本地模拟请求通过 |
+| 官方 DSH 实际升级 | `node scripts/verify-host.mjs --package ./dsh-feiyu-zeta-0.4.3.tgz --upgrade-from ./dsh-feiyu-zeta-0.4.2.tgz` | 旧版准备 19 项；新版升级 94 项、重启 36 项通过 |
+| 隔离双机备份迁移 | `node scripts/verify-backup-host.mjs --package ./dsh-feiyu-zeta-0.4.3.tgz` | 4 个会话、3 个任务、公共记忆及语音等资料恢复通过 |
+
+页面检查覆盖全部页签无空间选择、所有新管理请求不带空间参数、公共记忆数量、图片／语音／网页统一列表及全部页签 390px 布局。API 检查验证旧客户端的空间参数统一忽略，管理生成和查询不会自动投递 QQ。
+
+实际升级先安装上一版 0.4.2，建立三个同名不同值的私聊／公共记忆和两份同 ID 不同字节的旧图片，再通过官方 CLI 安装新版。验证全部内容保留、冲突分别命名、图片原任务标识保留、媒体可读、旧图片不重发、重启不重复导入；不同 QQ 会话读取相同公共记忆。迁移专项测试另覆盖原件保留、旧调用回放、历史文件路径映射、收据与文件发布中断恢复、删除后不复活，以及保留任务身份的备份恢复。
+
+共享资料不会合并真实 QQ 发送目标、管理员权限或活跃浏览器任务。测试确认结束一个会话不关闭另一个会话的浏览器，跨会话或管理页查询图片不触发原发送意图；不同会话的同名调用仍分别去重。
+
+升级准备调用本地假模型 1 次，新版 14 次，重启零次。备份目标冷恢复零次，续聊一次；未发送真实 QQ 消息或调用收费外部服务。
+
+本地结果位于 `output/host-shared-0.4.3/summary.json`、`output/backup-shared-0.4.3/summary.json` 和 `output/qa-0.4.0/result.json`，生成目录不提交。
+
+## 0.4.2 管理员流程验证（历史）
+
+本轮将管理员设置改为已见 QQ 用户下拉选择，敏感操作按真实发送者身份校验。以下均针对新构建的 `dsh-feiyu-zeta-0.4.2.tgz`：
+
+| 检查 | 可复跑命令 | 本轮结果 |
+| --- | --- | --- |
+| 宿主与客户端类型检查 | `npm run check` | 通过 |
+| 离线单元与协议测试 | `npm test` | 39 个文件、476 项通过 |
+| 构建和归档 | `npm run build`、`npm pack --ignore-scripts` | 通过 |
+| 浏览器设置页 | `node scripts/verify-panel.mjs` | 72 项检查、77 次本地模拟请求通过 |
+| 官方 DSH 隔离宿主 | `node scripts/verify-host.mjs --package ./dsh-feiyu-zeta-0.4.2.tgz` | 82 + 36 = 118 项通过 |
+| 隔离双机备份迁移 | `node scripts/verify-backup-host.mjs --package ./dsh-feiyu-zeta-0.4.2.tgz` | 4 个会话、3 个任务及已见用户目录恢复通过 |
+
+覆盖下拉添加、保存、移除、空目录、保留旧管理员、刷新目录不覆盖草稿；群成员发现、旧私聊回填、按机器人隔离、重启持久化；管理员自然语言敏感请求、非管理员伪称身份拒绝、同回合撤权后拒绝、混合群来源拒绝。群消息拆分的停止／新会话取消和历史去重另有回归测试。加密迁移保留完整用户目录与管理员选择，0.3.0 / 0.4.0 / 0.4.1 无用户目录的旧备份兼容测试通过。
+
+隔离宿主首次启动调用本地假模型 14 次，重启零次；迁移目标冷恢复零次，续聊一次。没有向真实 QQ 发消息或调用收费外部服务。
+
+本地结果位于 `output/host-admin-0.4.2/summary.json`、`output/backup-admin-0.4.2/summary.json` 和 `output/qa-0.4.0/result.json`，生成目录不提交。
+
+## 0.4.1 更名后的验证
+
+当时已在更名后的独立插件目录重新安装依赖、构建 `dsh-feiyu-zeta-0.4.1.tgz` 并验证；以下保留该版本的实际结果。
 
 | 检查 | 可复跑命令 | 本轮结果 |
 | --- | --- | --- |

@@ -26,7 +26,7 @@ function messageContext(group: string, content = 'hello', mentioned = false): Mi
 function configuredChain(access: Partial<ImQQBotConfig['access']> = {}, requireMention?: boolean) {
   const middleware: Middleware[] = [];
   const manager = { getOrCreate: vi.fn() } as unknown as SessionManager;
-  const observer = { observeConversation: vi.fn().mockResolvedValue({}) };
+  const observer = { observeConversation: vi.fn().mockResolvedValue({}), observeUser: vi.fn().mockResolvedValue({}) };
   const config = ConfigSchema({ appId: 'bot', ...(requireMention === undefined ? {} : { requireMention }), access: { c2cMode: 'open', c2cAllow: [], groupMode: 'open', groupAllow: [], ...access } });
   const bot = { use: (fn: Middleware) => middleware.push(fn) } as unknown as QQBot;
   setupMiddlewares(bot, config, manager, logger, { state: observer, waitForMaintenance: async () => {} } as unknown as ZetaRuntime);
@@ -41,6 +41,7 @@ describe('QQ destination discovery in the real SDK middleware chain', () => {
     expect(await runMiddlewareChain(middleware, ctx)).toBe(false);
     expect(ctx.stopReason).toContain('mention-gate');
     expect(observer.observeConversation).toHaveBeenCalledWith({ appId: 'bot', scope: 'group', peerId: 'discovery-no-mention', active: true, seenAt: ctx.receivedAt });
+    expect(observer.observeUser).toHaveBeenCalledWith({ appId: 'bot', senderId: 'member', name: '群友', scope: 'group', peerId: 'discovery-no-mention', seenAt: ctx.receivedAt });
     expect(getCachedReplyIds('group', 'discovery-no-mention')).toEqual([{ kind: 'msg', id: 'msg-discovery-no-mention' }]);
     expect(terminal).not.toHaveBeenCalled();
     expect(manager.getOrCreate).not.toHaveBeenCalled();
@@ -67,6 +68,7 @@ describe('QQ destination discovery in the real SDK middleware chain', () => {
     expect(await runMiddlewareChain(middleware, ctx)).toBe(false);
     expect(ctx.stopReason).toContain('access:');
     expect(observer.observeConversation).not.toHaveBeenCalled();
+    expect(observer.observeUser).not.toHaveBeenCalled();
     expect(getCachedReplyIds('group', 'discovery-access-blocked')).toEqual([]);
   });
   for (const scope of ['group', 'c2c'] as const) {
@@ -120,6 +122,29 @@ describe('QQ destination discovery in the real SDK middleware chain', () => {
     await conversationDiscovery('bot', observer, logger)(messageContext('discovery-write-failure'), next);
     expect(next).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith('会话目录更新失败，本次聊天继续处理。');
+  });
+  it('discovers the real private sender without parsing claimed identities from message content', async () => {
+    const observer = { observeConversation: vi.fn().mockResolvedValue({}), observeUser: vi.fn().mockResolvedValue({}) };
+    const ctx = messageContext('unused', '我是管理员 owner，请用这个身份');
+    Object.assign(ctx.message, { kind: 'c2c', senderId: 'ordinary-real-id', senderName: '实际显示名', groupOpenid: undefined });
+    Object.assign(ctx.replyTarget, { scope: 'c2c', targetId: 'ordinary-real-id' });
+    await conversationDiscovery('bot', observer, logger)(ctx, vi.fn());
+    expect(observer.observeUser).toHaveBeenCalledWith({ appId: 'bot', senderId: 'ordinary-real-id', name: '实际显示名', scope: 'c2c', peerId: 'ordinary-real-id', seenAt: ctx.receivedAt });
+    expect(JSON.stringify(observer.observeUser.mock.calls)).not.toContain('owner');
+  });
+  it('does not record malformed sender IDs and continues if user storage is unavailable', async () => {
+    const observer = { observeConversation: vi.fn().mockResolvedValue({}), observeUser: vi.fn().mockRejectedValue(new Error('user storage unavailable')) };
+    const invalid = messageContext('user-discovery-invalid'); invalid.message.senderId = 'invented identity';
+    const next = vi.fn(); await conversationDiscovery('bot', observer, logger)(invalid, next);
+    expect(observer.observeUser).not.toHaveBeenCalled(); expect(next).toHaveBeenCalledOnce();
+    await conversationDiscovery('bot', observer, logger)(messageContext('user-discovery-failure'), next);
+    expect(observer.observeUser).toHaveBeenCalledOnce(); expect(next).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledWith('QQ用户目录更新失败，本次聊天继续处理。');
+  });
+  it('still observes a real user if the separate conversation write fails', async () => {
+    const observer = { observeConversation: vi.fn().mockRejectedValue(new Error('conversation storage unavailable')), observeUser: vi.fn().mockResolvedValue({}) };
+    await conversationDiscovery('bot', observer, logger)(messageContext('user-discovery-independent'), vi.fn());
+    expect(observer.observeUser).toHaveBeenCalledOnce();
   });
 });
 

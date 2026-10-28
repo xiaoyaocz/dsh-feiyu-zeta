@@ -3,6 +3,7 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { dirname, extname, join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import type { ModuleExecution } from './contracts.ts';
+import { legacyMaterialOwner, materialActorKey, migratedOperationId } from './shared-materials.ts';
 import { atomicJson, boundedBytes, readServiceJson, registerServiceTool, responseObject, scopeFor, ServiceError, serviceAbort,
   serviceHash, serviceObject, type ExternalModuleHost } from './browser.ts';
 
@@ -17,7 +18,7 @@ export interface DeploymentResult {
   id: string; title: string; status: 'preparing' | 'deploying' | 'ready' | 'failed' | 'unknown' | 'deleted' | 'expired';
   previewUrl?: string; createdAt: string; expiresAt?: string; fileCount: number; bytes: number; notice?: string;
 }
-interface DeploymentRecord extends DeploymentResult { version: 1; owner: string; accountId?: string; scriptName: string; fingerprint: string }
+interface DeploymentRecord extends DeploymentResult { version: 1; owner: string; actorKey?: string; accountId?: string; scriptName: string; fingerprint: string }
 interface PreviewSecrets { apiToken: string; claimUrl: string }
 export interface DeploymentSecrets {
   set(id: string, value: string): Promise<void>;
@@ -87,7 +88,7 @@ export class DeploymentService {
   }
   private serial<T>(run: () => Promise<T>): Promise<T> { const task = this.queue.then(run); this.queue = task.catch(() => {}); return task; }
   private public(record: DeploymentRecord): DeploymentResult {
-    const { version: _version, owner: _owner, accountId: _accountId, scriptName: _scriptName, fingerprint: _fingerprint, ...result } = record;
+    const { version: _version, owner: _owner, actorKey: _actor, accountId: _accountId, scriptName: _scriptName, fingerprint: _fingerprint, ...result } = record;
     return result;
   }
   private async load(id: string): Promise<DeploymentRecord | undefined> {
@@ -197,7 +198,15 @@ export class DeploymentService {
     await this.options.beforeDeploy?.(input, exec);
     this.host.requireWritable?.();
     if (this.stopped) throw new ServiceError('STOPPED', '临时部署服务已停止。');
-    const id = input.id ?? serviceHash(`${owner}:${exec.callId || randomUUID()}`).slice(0, 40);
+    const actorKey = materialActorKey(this.host, exec.agent), callId = exec.callId || randomUUID();
+    let id = input.id ?? serviceHash(`${actorKey}:${callId}`).slice(0, 40);
+    if (!input.id && exec.callId) {
+      const oldId = serviceHash(`${legacyMaterialOwner(this.host, exec.agent)}:${callId}`).slice(0, 40);
+      await migratedOperationId(this.host.dataDir, 'deployments', legacyMaterialOwner(this.host, exec.agent), oldId);
+      const old = await this.load(oldId);
+      if (old?.owner === owner && !old.actorKey) id = oldId;
+    }
+    serviceAbort(exec.signal); this.host.requireWritable?.();
     this.path(id);
     const fingerprint = serviceHash(JSON.stringify({ files: files.map(file => ({ path: file.path, hash: file.hash })), title: input.title ?? '' }));
     const active = this.running.get(id);
@@ -229,7 +238,7 @@ export class DeploymentService {
             if (previous && !['failed', 'deleted', 'expired'].includes((await this.expire(previous)).status)) active++;
           }
           if (active >= settings.maxActive) throw new ServiceError('BUDGET', '活跃临时网页已达上限，请先删除旧预览。');
-          record = { version: 1, id, owner, fingerprint, scriptName: `zeta-${id.slice(0, 20)}`, title: input.title?.trim() || '临时网页', status: 'preparing',
+          record = { version: 1, id, owner, actorKey: materialActorKey(this.host, exec.agent), fingerprint, scriptName: `zeta-${id.slice(0, 20)}`, title: input.title?.trim() || '临时网页', status: 'preparing',
             createdAt: new Date().toISOString(), fileCount: files.length, bytes: files.reduce((sum, file) => sum + file.bytes.length, 0) };
           await writeFile(this.path(id), JSON.stringify(record), { flag: 'wx', mode: 0o600 });
         });

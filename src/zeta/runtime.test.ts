@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Context } from '@deepseek-ai/cordis';
 import { testDomainContext } from './test-support.ts';
@@ -18,13 +18,18 @@ describe('trustworthy routes and autonomous contact rules', () => {
     const runtime = new ZetaRuntime(ctx, state, 'bot'); runtime.install(); const agent = { id: 's' };
     expect(guard({ agent, name: 'bash' })).toBeDefined();
     expect(guard({ agent: { id: 'unrelated-desktop-session' }, name: 'bash' })).toBeUndefined();
-    runtime.beginRequest(agent, [{ senderId: 'owner', messageId: 'real', text: '/admin 修改插件' }], false);
+    runtime.beginRequest(agent, [{ senderId: 'owner', messageId: 'real', text: '修改插件' }], false);
     expect(guard({ agent, name: 'bash' })).toBeUndefined();
+    expect(runtime.canApprove(agent)).toBe(true);
+    expect(runtime.canApprove(agent, 'owner')).toBe(true);
+    expect(runtime.canApprove(agent, 'stranger')).toBe(false);
     expect(guard({ agent, name: 'zeta_life_plan_next' })).toBeDefined();
     expect(guard({ agent: { id: 'life' }, name: 'bash' })).toBeDefined();
     expect(guard({ agent: { id: 'life' }, name: 'zeta_life_plan_next' })).toBeUndefined();
     const updated = state.settings; updated.security.administrators = []; await state.setSettings(updated);
     expect(guard({ agent, name: 'bash' })).toBeDefined();
+    expect(runtime.canApprove(agent)).toBe(false);
+    expect(runtime.canApprove(agent, 'owner')).toBe(false);
     runtime.endRequest(agent); expect(guard({ agent, name: 'bash' })).toBeDefined(); await state.close();
   });
   it('keeps an existing native preset and binds child guards to expiring parent authority', async () => {
@@ -36,7 +41,7 @@ describe('trustworthy routes and autonomous contact rules', () => {
     const runtime = new ZetaRuntime(ctx, state, 'bot');
     await runtime.bindRecord({ agent, sessionId: 'scope', scope: 'c2c', peerId: 'owner' } as never);
     expect(presentAs).not.toHaveBeenCalled(); expect(scopedGuard({ name: 'bash' })).toBeDefined();
-    runtime.beginRequest(agent, [{ senderId: 'owner', messageId: 'request', text: '/admin 修改插件' }], false);
+    runtime.beginRequest(agent, [{ senderId: 'owner', messageId: 'request', text: '修改插件' }], false);
     expect(scopedGuard({ name: 'bash' })).toBeUndefined(); runtime.endRequest(agent);
     expect(scopedGuard({ name: 'bash' })).toBeDefined(); await state.close();
   });
@@ -70,9 +75,18 @@ describe('trustworthy routes and autonomous contact rules', () => {
     expect(await deliver()).toMatchObject({ status: 'accepted', messageId: 'message' });
     expect(await deliver()).toMatchObject({ reused: true });
     expect(sendFile).toHaveBeenCalledTimes(1);
-    const other = await runtime.directoryFor(runtime.managementAgent('self:zeta'), 'speech');
-    const privateFile = join(other, 'other.txt'); await writeFile(privateFile, 'private');
-    await expect(runtime.sendFile({ id: 's' }, privateFile, undefined, new AbortController().signal)).rejects.toThrow('当前会话');
+    const shared = await runtime.directoryFor(runtime.managementAgent(), 'speech');
+    expect(shared).toBe(await runtime.directoryFor({ id: 's' }, 'speech'));
+    const sharedFile = join(shared, 'shared.txt'); await writeFile(sharedFile, 'public');
+    expect(await runtime.sendFile({ id: 's' }, sharedFile, undefined, new AbortController().signal)).toMatchObject({ status: 'accepted' });
+    const oldData = 'C:\\old-fixture-computer\\zeta';
+    await state.setMigration({ backupId: 'mapped-backup', status: 'complete', dataRoot: runtime.dataDir, workspaceRoot: workspace, restartRequired: false, qqPaused: false, pathMappings: { [oldData]: runtime.dataDir } });
+    const legacyShared = `${oldData}\\${relative(runtime.dataDir, sharedFile)}`;
+    expect(await runtime.sendFile({ id: 's' }, legacyShared, undefined, new AbortController().signal)).toMatchObject({ status: 'accepted' });
+    await expect(runtime.sendFile({ id: 's' }, `${oldData}\\..\\outside.txt`, undefined, new AbortController().signal)).rejects.toThrow('迁移素材路径');
+    const privateRoot = join(runtime.dataDir, 'persona'); await mkdir(privateRoot);
+    const privateFile = join(privateRoot, 'internal.txt'); await writeFile(privateFile, 'private');
+    await expect(runtime.sendFile({ id: 's' }, privateFile, undefined, new AbortController().signal)).rejects.toThrow('目录');
     await expect(execute('zeta_send_message', () => runtime.sendText({ id: 's' }, 'hello', undefined, new AbortController().signal))).rejects.toThrow('未确认');
     await state.close(); await rm(root, { recursive: true, force: true });
   });
@@ -80,10 +94,26 @@ describe('trustworthy routes and autonomous contact rules', () => {
     const ctx = testDomainContext(); const state = await ZetaState.open(ctx);
     await state.bind({ key: 'qq:bot:c2c:alice', appId: 'bot', scope: 'c2c', peerId: 'alice', sessionId: 's' });
     const runtime = new ZetaRuntime(ctx, state, 'bot'); const agent = { session: { id: 's' } };
-    expect(runtime.spaceFor(agent)).toBe('qq:bot:c2c:alice');
+    expect(runtime.spaceFor(agent)).toBe('self:zeta');
     expect(() => runtime.targetFor(agent, 'group:other')).toThrow('未知QQ会话');
     expect(() => runtime.spaceFor({ id: 'unknown' })).toThrow('可信QQ身份');
     expect(() => runtime.targetFor(runtime.managementAgent('self:zeta'))).toThrow('管理试听');
+    await state.close();
+  });
+  it('shares one library across private chats, groups, autonomous life and owner management without changing routes', async () => {
+    const ctx = testDomainContext(); const state = await ZetaState.open(ctx);
+    await state.bind({ key: 'qq:bot:c2c:alice', appId: 'bot', scope: 'c2c', peerId: 'alice', sessionId: 'alice' });
+    await state.bind({ key: 'qq:bot:group:friends', appId: 'bot', scope: 'group', peerId: 'friends', sessionId: 'friends' });
+    await state.bind({ key: 'qq:other-bot:c2c:alice', appId: 'other-bot', scope: 'c2c', peerId: 'alice', sessionId: 'other-bot' });
+    await state.updateLife(current => ({ ...current, sessionId: 'life' }));
+    const runtime = new ZetaRuntime(ctx, state, 'bot');
+    for (const actor of [{ id: 'alice' }, { id: 'friends' }, { id: 'life' }, runtime.managementAgent(), runtime.managementAgent('old-management-space')]) expect(runtime.spaceFor(actor)).toBe(runtime.selfSpace);
+    expect(runtime.targetFor({ id: 'alice' }).peerId).toBe('alice');
+    runtime.beginRequest({ id: 'friends' }, [{ senderId: 'member', messageId: 'group-message', text: '请回复' }], true);
+    runtime.decideGroup({ id: 'friends' }, 'reply');
+    expect(runtime.targetFor({ id: 'friends' }).peerId).toBe('friends');
+    expect(() => runtime.spaceFor({ id: 'other-bot' })).toThrow('可信QQ身份');
+    expect(() => runtime.spaceFor({ id: 'unbound' })).toThrow('可信QQ身份');
     await state.close();
   });
   it('checks autonomous target, quiet time, media permissions and cooldown deterministically', async () => {
@@ -103,7 +133,7 @@ describe('trustworthy routes and autonomous contact rules', () => {
     expect(quietNow(23, 8, 'Asia/Shanghai', new Date('2026-10-28T06:00:00Z'))).toBe(false);
     await state.close();
   });
-  it('does not retry unknown sends and does not leak files from another scope', async () => {
+  it('does not retry unknown sends and protects internal files outside the public library', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'zeta-runtime-'));
     const listeners = new Map<string, Function>();
     const ctx = Object.assign(testDomainContext(), { on: (name: string, fn: Function) => listeners.set(name, fn), effect: () => {}, tools: { register: () => {}, guard: () => () => {} }, systemPrompt: { section: () => {}, context: () => {} } }) as unknown as Context;
@@ -117,7 +147,7 @@ describe('trustworthy routes and autonomous contact rules', () => {
     await expect(run()).rejects.toThrow('禁止自动重发');
     expect(sender.sendMarkdown).toHaveBeenCalledTimes(1);
     const outside = join(directory, 'outside.wav'); await writeFile(outside, 'not audio');
-    await expect(runtime.sendFile({ id: 's' }, outside, undefined, new AbortController().signal)).rejects.toThrow('当前会话');
+    await expect(runtime.sendFile({ id: 's' }, outside, undefined, new AbortController().signal)).rejects.toThrow('目录');
     await state.close(); await rm(directory, { recursive: true, force: true });
   });
 });

@@ -61,7 +61,10 @@ export function setupMiddlewares(
 
   // Accepted messages reveal their QQ destination even when mention/command
   // middleware later stops them. Discovery never starts a model turn.
-  if (zeta) bot.use(conversationDiscovery(config.appId, { observeConversation: async observation => { await zeta.waitForMaintenance(); return zeta.state.observeConversation(observation); } }, logger));
+  if (zeta) bot.use(conversationDiscovery(config.appId, {
+    observeConversation: async observation => { await zeta.waitForMaintenance(); return zeta.state.observeConversation(observation); },
+    observeUser: async observation => { await zeta.waitForMaintenance(); return zeta.state.observeUser(observation); },
+  }, logger));
 
   // 4. 群历史缓冲 — 放在门控之前，确保所有消息（含未 @bot）都计入上下文
   //    store 走共享单例（getHistoryStore），groupKey 带 appId 前缀，供回复后清空

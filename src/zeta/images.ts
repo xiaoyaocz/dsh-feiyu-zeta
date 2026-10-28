@@ -6,6 +6,7 @@ import type { ModuleExecution } from './contracts.ts';
 import { atomicJson, boundedBytes, publicHttpUrl, readServiceJson, registerServiceTool, responseObject,
   scopeFor, ServiceError, serviceAbort, serviceHash, serviceObject, type ExternalModuleHost } from './browser.ts';
 import { imageMime, type PersonaService } from './persona.ts';
+import { legacyMaterialOwner, materialActorKey, migratedOperationId } from './shared-materials.ts';
 
 export interface ImageSettings {
   enabled: boolean; model: string; resolution: '1K' | '2K' | '4K'; timeoutMs: number; pollIntervalMs: number;
@@ -19,7 +20,7 @@ export interface ImageResult {
   model: string; resolution: string; createdAt: string; selfPortrait: boolean; filePath?: string; mimeType?: string; bytes?: number;
   delivery: 'not_requested' | 'pending' | 'sent' | 'failed' | 'unknown'; cost?: number; notice?: string;
 }
-interface ImageRecord extends ImageResult { version: 1; owner: string; fingerprint: string; sha256?: string; send: boolean; target?: string }
+interface ImageRecord extends ImageResult { version: 1; owner: string; actorKey?: string; fingerprint: string; sha256?: string; send: boolean; target?: string }
 export interface ImageOptions {
   fetch?: typeof fetch;
   beforeGenerate?: (input: ImageInput, exec: ModuleExecution) => void | Promise<void>;
@@ -43,7 +44,7 @@ export class ImageService {
     const task = this.queue.then(run); this.queue = task.catch(() => {}); return task;
   }
   private public(record: ImageRecord): ImageResult {
-    const { version: _version, owner: _owner, fingerprint: _fingerprint, sha256: _sha, send: _send, target: _target, ...value } = record;
+    const { version: _version, owner: _owner, actorKey: _actor, fingerprint: _fingerprint, sha256: _sha, send: _send, target: _target, ...value } = record;
     return { ...value, ...(value.delivery === 'pending' ? { delivery: 'unknown' as const, notice: '此前发送结果未确认，不会自动重发。' } : {}) };
   }
   private async settings(): Promise<ImageSettings> {
@@ -105,7 +106,10 @@ export class ImageService {
     if (input.selfPortrait && !persona) throw new ServiceError('NO_PERSONA', '尚未上传人设图，不能按人设生成自画像。');
     serviceAbort(exec.signal); this.host.requireWritable?.();
     const fingerprint = serviceHash(JSON.stringify({ ...input, wait: undefined, model: settings.model, resolution: settings.resolution, persona: persona?.id }));
-    const id = serviceHash(exec.callId || randomUUID()).slice(0, 40);
+    const actorKey = materialActorKey(this.host, exec.agent);
+    const callId = exec.callId || randomUUID();
+    const id = await migratedOperationId(this.host.dataDir, 'images', legacyMaterialOwner(this.host, exec.agent), serviceHash(callId).slice(0, 40)) ?? serviceHash(`${actorKey}:${callId}`).slice(0, 40);
+    serviceAbort(exec.signal); this.host.requireWritable?.();
     const operation = `${owner}:${id}`;
     const active = this.running.get(operation);
     if (active) { const result = await active; const record = await this.load(owner, id); if (record?.fingerprint !== fingerprint) throw new ServiceError('CALL_CONFLICT', '相同调用标识对应不同生图参数。'); return result; }
@@ -128,7 +132,7 @@ export class ImageService {
         if (input.selfPortrait && !reference) throw new ServiceError('NO_PERSONA', '人设图已移除，请重新上传。');
         await mkdir(this.directory(owner), { recursive: true });
         serviceAbort(signal);
-        record = { version: 1, owner, id, fingerprint, status: 'submitting', model: settings.model, resolution: settings.resolution,
+        record = { version: 1, owner, actorKey: materialActorKey(this.host, exec.agent), id, fingerprint, status: 'submitting', model: settings.model, resolution: settings.resolution,
           createdAt: new Date().toISOString(), selfPortrait: !!input.selfPortrait, delivery: 'not_requested', send: input.send === true, target: input.target };
         await writeFile(this.path(owner, id), JSON.stringify(record), { flag: 'wx', mode: 0o600 });
         try { await this.reserve(settings); }
@@ -198,7 +202,7 @@ export class ImageService {
         record.status = 'completed'; record.filePath = filePath; record.bytes = bytes.length; record.mimeType = mimeType; record.sha256 = serviceHash(bytes);
         if (typeof data.cost === 'number' && Number.isFinite(data.cost) && data.cost >= 0) record.cost = data.cost;
         await atomicJson(this.path(record.owner, record.id), record);
-        if (record.send && record.delivery === 'not_requested') {
+        if (record.send && record.delivery === 'not_requested' && record.actorKey === materialActorKey(this.host, agent)) {
           serviceAbort(signal);
           record.delivery = 'pending'; await atomicJson(this.path(record.owner, record.id), record);
           try {
@@ -206,6 +210,8 @@ export class ImageService {
             record.delivery = receipt.outcome === 'failed' || receipt.status === 'failed' ? 'failed' :
               receipt.outcome === 'sent' || receipt.status === 'accepted' || receipt.status === 'sent' || typeof receipt.messageId === 'string' && !!receipt.messageId ? 'sent' : 'unknown';
           } catch { record.delivery = 'unknown'; record.notice = '图片已生成，QQ发送结果未确认；不会自动重发。'; }
+        } else if (record.send && record.delivery === 'not_requested') {
+          record.notice = '图片已生成；查询者不是任务发起会话，未自动发送。需要发送时请明确调用发送工具。';
         }
       } else if (data.status === 'pending' || data.status === 'processing' || data.status === 'submitted') record.status = data.status === 'processing' ? 'processing' : 'pending';
       else throw new ServiceError('INVALID_RESPONSE', 'ApiMart 任务状态无效。');
@@ -233,6 +239,11 @@ export class ImageService {
     this.host.requireWritable?.();
     if (this.stopped) throw new ServiceError('STOPPED', '图像服务已停止。');
     const owner = scopeFor(this.host, exec.agent);
+    const canonical = id.startsWith('public:');
+    if (canonical) id = id.slice('public:'.length);
+    this.path(owner, id);
+    if (!canonical) id = await migratedOperationId(this.host.dataDir, 'images', legacyMaterialOwner(this.host, exec.agent), id) ?? id;
+    serviceAbort(exec.signal); this.host.requireWritable?.();
     const record = await this.load(owner, id);
     if (!record) throw new ServiceError('NOT_FOUND', '当前对话没有此图片任务。');
     serviceAbort(exec.signal); this.host.requireWritable?.();
@@ -272,7 +283,7 @@ export function registerImageTools(service: ImageService): void {
       prompt: { type: 'string' }, size: { type: 'string', enum: RATIOS }, selfPortrait: { type: 'boolean' },
       referenceUrls: { type: 'array', maxItems: 3, items: { type: 'string' } }, send: { type: 'boolean' }, target: { type: 'string' }, wait: { type: 'boolean' },
     }, required: ['prompt'], additionalProperties: false }, execute: (input: ImageInput, exec: ModuleExecution) => service.generate(input, exec) });
-  registerServiceTool(service.host, { name: 'zeta_image_status', description: '查询或等待当前对话已有的生图任务。不会新建收费任务；完成后下载图片，并只执行原任务要求的一次QQ发送。',
+  registerServiceTool(service.host, { name: 'zeta_image_status', description: '查询或等待公共库已有的生图任务，不会新建收费任务。历史任务id按原会话迁移映射；查询公共列表中的明确id可用public:<id>。完成后下载图片，只有原任务会话才可执行原任务要求的一次QQ发送。',
     parameters: { type: 'object', properties: { id: { type: 'string' }, wait: { type: 'boolean' } }, required: ['id'], additionalProperties: false },
     execute: (input: { id: string; wait?: boolean }, exec: ModuleExecution) => service.status(input.id, exec, input.wait === true) });
 }

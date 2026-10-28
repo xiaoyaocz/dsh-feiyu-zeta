@@ -23,7 +23,8 @@ interface IdentityFields { name: string; persona: string; habits: string[] }
 interface IdentityChange { revision: number; reason: string; createdAt: string; sourceSessionId?: string; before: IdentityFields; after: IdentityFields }
 interface IdentitySummary { revision: number; updatedAt?: string; history: IdentityChange[] }
 interface IdentitySnapshot extends IdentityFields, IdentitySummary {}
-interface State { settings: Settings; identity?: IdentitySummary; credentials: Record<Provider | 'cloudflare' | 'apimart', boolean>; life: Life; bindings: Binding[]; conversations: Conversation[]; spaces: Array<{ key: string; count: number; revision: number }>; version: string }
+interface AdministratorCandidate { senderId: string; name?: string; scope?: 'c2c' | 'group'; peerId?: string; lastSeenAt: number; observed: boolean }
+interface State { settings: Settings; identity?: IdentitySummary; administratorCandidates?: AdministratorCandidate[]; credentials: Record<Provider | 'cloudflare' | 'apimart', boolean>; life: Life; bindings: Binding[]; conversations: Conversation[]; memoryCount: number; version: string }
 interface Memory { key: string; value: string; tags: string[]; pinned: boolean; createdAt: string; updatedAt: string }
 interface Meme { id: string; caption: string; tag?: string; keywords?: string | string[]; fileName?: string; builtin?: boolean }
 interface MemeImport { imported: number; skipped: number; complete: boolean; cancelled?: boolean; error?: string }
@@ -88,7 +89,7 @@ function knownConversations(state: State): Conversation[] {
   for (const conversation of state.conversations ?? []) values.set(conversation.target, conversation);
   return [...values.values()].sort((a, b) => Number(b.active) - Number(a.active) || b.lastSeenAt - a.lastSeenAt || conversationName(a).localeCompare(conversationName(b), 'zh-CN'));
 }
-function mediaPath(space: string, kind: 'meme' | 'speech', id: string): string { return `${API}/media?${new URLSearchParams({ space, kind, id })}`; }
+function mediaPath(kind: 'meme' | 'speech', id: string): string { return `${API}/media?${new URLSearchParams({ kind, id })}`; }
 
 function useTask(feedback: Feedback): { busy: boolean; run: (work: () => Promise<void>) => Promise<void> } {
   const [busy, setBusy] = useState(false);
@@ -122,7 +123,7 @@ function useStyles(): void {
 .zeta-settings .zs-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.zeta-settings .zs-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}.zeta-settings .zs-stat{font-size:20px;font-weight:600;margin-top:6px;overflow-wrap:anywhere}
 .zeta-settings .zs-field{display:flex;flex-direction:column;gap:6px;min-width:0}.zeta-settings .zs-label{font-weight:500}.zeta-settings .zs-check{display:flex;align-items:flex-start;gap:9px;cursor:pointer;min-width:0}.zeta-settings .zs-check input{margin-top:3px}.zeta-settings .zs-check span{min-width:0;overflow-wrap:anywhere}.zeta-settings .zs-check small{display:block;color:var(--dsw-alias-label-secondary,#697280);font-size:12px;font-weight:400;margin-top:2px}
 .zeta-settings .zs-notice{padding:10px 12px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover,#f2f4f7);margin-bottom:14px;overflow-wrap:anywhere}.zeta-settings .zs-error{color:var(--dsw-alias-state-error-primary,#bd3131);border:1px solid currentColor}
-.zeta-settings .zs-scope{margin-bottom:16px;max-width:440px}.zeta-settings .zs-empty{padding:26px 12px;text-align:center;color:var(--dsw-alias-label-secondary,#697280)}.zeta-settings .zs-body{white-space:pre-wrap;overflow-wrap:anywhere}.zeta-settings .zs-record{padding:13px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#e3e6eb)}.zeta-settings .zs-record:last-child{border-bottom:0}.zeta-settings .zs-record-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:6px}.zeta-settings .zs-record-title{font-weight:600;overflow-wrap:anywhere;min-width:0}.zeta-settings .zs-badge{display:inline-block;padding:2px 7px;border-radius:99px;font-size:11px;background:var(--dsw-alias-interactive-bg-hover,#eef1f6);font-weight:400}
+.zeta-settings .zs-empty{padding:26px 12px;text-align:center;color:var(--dsw-alias-label-secondary,#697280)}.zeta-settings .zs-body{white-space:pre-wrap;overflow-wrap:anywhere}.zeta-settings .zs-record{padding:13px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#e3e6eb)}.zeta-settings .zs-record:last-child{border-bottom:0}.zeta-settings .zs-record-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:6px}.zeta-settings .zs-record-title{font-weight:600;overflow-wrap:anywhere;min-width:0}.zeta-settings .zs-badge{display:inline-block;padding:2px 7px;border-radius:99px;font-size:11px;background:var(--dsw-alias-interactive-bg-hover,#eef1f6);font-weight:400}
 .zeta-settings .zs-search{display:flex;align-items:center;gap:8px}.zeta-settings .zs-search input{flex:1}.zeta-settings .zs-memes{display:grid;grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:12px}.zeta-settings .zs-meme{display:flex;flex-direction:column;gap:8px;text-align:left;border:1px solid var(--dsw-alias-border-l2,#e0e4eb);border-radius:10px;padding:8px;background:var(--dsw-alias-bg-layer-3,#fff);min-width:0}.zeta-settings .zs-meme[aria-pressed=true]{border-color:var(--dsw-alias-brand-primary,#4d6bfe)}.zeta-settings .zs-picture{width:100%;aspect-ratio:1;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:6px;background:var(--dsw-alias-interactive-bg-hover,#f5f6f8)}.zeta-settings .zs-picture img{display:block;max-width:100%;max-height:100%;object-fit:contain}.zeta-settings .zs-caption{font-size:12px;overflow-wrap:anywhere}.zeta-settings .zs-preview{max-width:280px;width:100%;margin:auto}.zeta-settings audio{width:100%;max-width:100%}.zeta-settings .zs-loading{padding:24px;text-align:center}.zeta-settings details>summary{cursor:pointer;font-weight:500}.zeta-settings details[open]>summary{margin-bottom:12px}.zeta-settings .zs-spacer{flex:1}.zeta-settings .zs-code{font-family:ui-monospace,monospace;font-size:11px;overflow-wrap:anywhere}.zeta-settings .zs-targets{max-height:250px;overflow:auto;display:flex;flex-direction:column;gap:9px}
 @media(max-width:600px){.zeta-settings .zs-grid{grid-template-columns:1fr}.zeta-settings .zs-card{padding:12px}.zeta-settings .zs-memes{grid-template-columns:repeat(2,minmax(0,1fr))}.zeta-settings .zs-record-head{flex-wrap:wrap}.zeta-settings .zs-actions>*{max-width:100%}.zeta-settings .zs-head{align-items:flex-start}.zeta-settings .zs-search{align-items:stretch;flex-wrap:wrap}.zeta-settings .zs-search input{min-width:140px}.zeta-settings .zs-tab{padding:8px 10px}.zeta-settings .zs-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 `;
@@ -176,12 +177,12 @@ function useMedia(url: string | undefined): { objectUrl?: string; failed: boolea
   return state;
 }
 
-function MediaImage({ space, item }: { space: string; item: Meme }): ReactNode {
-  const media = useMedia(mediaPath(space, 'meme', item.id));
+function MediaImage({ item }: { item: Meme }): ReactNode {
+  const media = useMedia(mediaPath('meme', item.id));
   return h('span', { className: 'zs-picture' }, media.objectUrl ? h('img', { src: media.objectUrl, alt: item.caption || '表情图片' }) : h('span', { className: 'zs-muted' }, media.failed ? '预览暂不可用' : '加载图片…'));
 }
-function AudioPreview({ space, item }: { space: string; item: Speech }): ReactNode {
-  const media = useMedia(mediaPath(space, 'speech', item.fileName));
+function AudioPreview({ item }: { item: Speech }): ReactNode {
+  const media = useMedia(mediaPath('speech', item.fileName));
   return h('div', { className: 'zs-stack' }, media.objectUrl ? h('audio', { controls: true, preload: 'metadata', src: media.objectUrl, 'aria-label': `${PROVIDER_NAME[item.provider]}语音试听` }) : h('p', { className: 'zs-muted' }, media.failed ? '音频暂时无法读取，请刷新后重试。' : '正在读取音频…'), item.notice ? h('p', { className: 'zs-muted' }, item.notice) : null);
 }
 
@@ -197,7 +198,7 @@ function Overview({ state, onNavigate }: { state: State; onNavigate: (tab: Tab) 
   const status = state.life.status === 'running' ? '活动中' : state.life.status === 'error' ? '需要查看' : state.settings.life.enabled ? '等待下次活动' : '未开启';
   const stats = [
     ['已知会话', `${knownConversations(state).length} 个`],
-    ['长期记忆', `${state.spaces.reduce((sum, space) => sum + space.count, 0)} 条`],
+    ['公共记忆', `${state.memoryCount} 条`],
     ['语音服务', state.settings.speech.enabled ? PROVIDER_NAME[state.settings.speech.provider] : '未开启'],
     ['自主生活', status],
   ];
@@ -231,7 +232,7 @@ function PersonaPanel({ draft, setDraft, save, saving, dirty, feedback, identity
         h(Button, { danger: true, disabled: saving || identityBusy, onClick: resetIdentity }, '恢复最新默认人设'))),
     h('form', { className: 'zs-stack', onSubmit: (event: FormEvent<HTMLFormElement>) => { if (invalidHabits) { event.preventDefault(); feedback('习惯最多30条，每条最多300字。', true); return; } save(event); } }, h('fieldset', { disabled: saving || identityBusy, className: 'zs-stack' },
     h(Field, { label: '名字', children: h('input', { value: draft.name, maxLength: 80, required: true, onChange: (event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, name: event.target.value }) }) }),
-    h(Field, { label: '人设与表达习惯', hint: '写下性格、说话方式和重要背景。私人经历请放在对应会话的记忆里。', children: h('textarea', { value: draft.persona, rows: 12, maxLength: 16000, required: true, onChange: (event: ChangeEvent<HTMLTextAreaElement>) => setDraft({ ...draft, persona: event.target.value }) }) }),
+    h(Field, { label: '人设与表达习惯', hint: '写下性格、说话方式和重要背景。需要长期记住的经历、偏好与约定可放在所有对话共用的公共记忆里。', children: h('textarea', { value: draft.persona, rows: 12, maxLength: 16000, required: true, onChange: (event: ChangeEvent<HTMLTextAreaElement>) => setDraft({ ...draft, persona: event.target.value }) }) }),
     h(Field, { label: '日常习惯', hint: '每行一条，最多30条，每条最多300字。例如：聊天时先听完连续几条消息，再决定是否回应。', children: h('textarea', { value: habitText, rows: 5, maxLength: 9300, 'aria-invalid': invalidHabits, onChange: (event: ChangeEvent<HTMLTextAreaElement>) => { const value = event.target.value; setHabitText(value); setDraft({ ...draft, habits: targetLines(value) }); } }) }),
     h('p', { className: invalidHabits ? 'zs-danger' : 'zs-muted zs-small' }, invalidHabits ? '习惯最多30条，每条最多300字，请缩短后保存。' : `已填写 ${habits.length} / 30 条习惯`),
     h(SettingsFooter, { busy: saving || identityBusy, dirty: dirty && !invalidHabits }),
@@ -302,11 +303,11 @@ function ConversationsPanel({ state, feedback, refreshState, draft, setDraft, sa
   );
 }
 
-function MemoryPanel({ space, feedback, draft, setDraft, save, saving, dirty }: SettingsEditorProps & { space: string; feedback: Feedback }): ReactNode {
+function MemoryPanel({ feedback, draft, setDraft, save, saving, dirty }: SettingsEditorProps & { feedback: Feedback }): ReactNode {
   const [items, setItems] = useState<Memory[]>([]); const [loading, setLoading] = useState(false); const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<Memory>(); const [key, setKey] = useState(''); const [value, setValue] = useState(''); const [tags, setTags] = useState(''); const [pinned, setPinned] = useState(false);
   const task = useTask(feedback);
-  const load = useCallback(async (signal?: AbortSignal): Promise<void> => { const result = await request<{ items: Memory[] }>(`/memory?${new URLSearchParams({ space })}`, 'GET', undefined, signal); if (!signal?.aborted) setItems(result.items); }, [space]);
+  const load = useCallback(async (signal?: AbortSignal): Promise<void> => { const result = await request<{ items: Memory[] }>('/memory', 'GET', undefined, signal); if (!signal?.aborted) setItems(result.items); }, []);
   useEffect(() => {
     const controller = new AbortController(); setLoading(true); setItems([]); setEditing(undefined); setKey(''); setValue(''); setTags(''); setPinned(false);
     void load(controller.signal).catch(error => { if (!controller.signal.aborted) feedback(message(error), true); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -316,17 +317,17 @@ function MemoryPanel({ space, feedback, draft, setDraft, save, saving, dirty }: 
   const clear = (): void => { setEditing(undefined); setKey(''); setValue(''); setTags(''); setPinned(false); };
   const submit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault(); void task.run(async () => {
-      await request('/memory', 'POST', { space, key: key.trim(), value: value.trim(), tags: splitTags(tags), pinned, ...(editing ? { expectedUpdatedAt: editing.updatedAt } : {}) });
+      await request('/memory', 'POST', { key: key.trim(), value: value.trim(), tags: splitTags(tags), pinned, ...(editing ? { expectedUpdatedAt: editing.updatedAt } : {}) });
       clear(); await load(); feedback(editing ? '记忆已更新。' : '记忆已保存。');
     });
   };
   return h('div', { className: 'zs-stack' },
-    h('div', { className: 'zs-card zs-stack' }, h('div', { className: 'zs-row' }, h('h3', { className: 'zs-spacer' }, '长期记忆'), h(Button, { disabled: loading || task.busy, onClick: () => { void task.run(async () => { await load(); feedback('记忆已刷新。'); }); } }, '刷新')),
+    h('div', { className: 'zs-card zs-stack' }, h('div', { className: 'zs-row' }, h('h3', { className: 'zs-spacer' }, '公共记忆'), h(Button, { disabled: loading || task.busy, onClick: () => { void task.run(async () => { await load(); feedback('记忆已刷新。'); }); } }, '刷新')),
       h('input', { type: 'search', value: query, placeholder: '搜索内容、名称或标签', 'aria-label': '搜索长期记忆', onChange: (event: ChangeEvent<HTMLInputElement>) => setQuery(event.target.value) }),
       loading ? h(Empty, null, '正在读取记忆…') : visible.length === 0 ? h(Empty, null, items.length ? '没有找到匹配的记忆。' : '这里还没有记忆。可以添加一条偏好或约定。') : h('div', null, visible.map(item => h('article', { className: 'zs-record', key: item.key },
         h('div', { className: 'zs-record-head' }, h('div', { className: 'zs-record-title' }, item.key, item.pinned ? h('span', { className: 'zs-badge' }, ' 常用') : null), h('div', { className: 'zs-actions' },
           h(Button, { disabled: task.busy, onClick: () => { setEditing(item); setKey(item.key); setValue(item.value); setTags(item.tags.join('，')); setPinned(item.pinned); } }, '编辑'),
-          h(Button, { danger: true, disabled: task.busy, onClick: () => { void task.run(async () => { await request('/memory', 'DELETE', { space, key: item.key }); if (editing?.key === item.key) clear(); await load(); feedback('这条长期记忆已删除。'); }); } }, '删除'))),
+          h(Button, { danger: true, disabled: task.busy, onClick: () => { void task.run(async () => { await request('/memory', 'DELETE', { key: item.key }); if (editing?.key === item.key) clear(); await load(); feedback('这条长期记忆已删除。'); }); } }, '删除'))),
         h('p', { className: 'zs-body' }, item.value), h('p', { className: 'zs-muted' }, `${item.tags.length ? `${item.tags.join(' · ')}　` : ''}${date(item.updatedAt)}`))))),
     h('form', { className: 'zs-card zs-stack', onSubmit: submit }, h('h3', null, editing ? '编辑记忆' : '添加记忆'), h('fieldset', { disabled: task.busy, className: 'zs-stack' },
       h(Field, { label: '名称', hint: '同一名称保存时会更新原有内容。', children: h('input', { value: key, disabled: !!editing, required: true, maxLength: 120, placeholder: '例如：喜欢的饮料', onChange: (event: ChangeEvent<HTMLInputElement>) => setKey(event.target.value) }) }),
@@ -337,32 +338,31 @@ function MemoryPanel({ space, feedback, draft, setDraft, save, saving, dirty }: 
     h('form', { className: 'zs-card', onSubmit: save }, h('details', null, h('summary', null, '记忆设置'), h('fieldset', { disabled: saving, className: 'zs-stack' },
       h(Check, { label: '启用长期记忆', checked: draft.memory.enabled, onChange: enabled => setDraft({ ...draft, memory: { ...draft.memory, enabled } }) }),
       h('div', { className: 'zs-grid' },
-        h(NumberField, { label: '每个空间最多保存条数', value: draft.memory.maxItems, min: 10, max: 1000, onChange: maxItems => setDraft({ ...draft, memory: { ...draft.memory, maxItems } }) }),
+        h(NumberField, { label: '公共记忆最多保存条数', value: draft.memory.maxItems, min: 10, max: 1000, onChange: maxItems => setDraft({ ...draft, memory: { ...draft.memory, maxItems } }) }),
         h(NumberField, { label: '单条记忆字数上限', value: draft.memory.maxValueChars, min: 100, max: 4000, onChange: maxValueChars => setDraft({ ...draft, memory: { ...draft.memory, maxValueChars } }) }),
         h(NumberField, { label: '自动带入条数', value: draft.memory.injectItems, min: 0, max: 12, onChange: injectItems => setDraft({ ...draft, memory: { ...draft.memory, injectItems } }) }),
         h(NumberField, { label: '自动带入总字数', value: draft.memory.injectChars, min: 0, max: 6000, onChange: injectChars => setDraft({ ...draft, memory: { ...draft.memory, injectChars } }) })), h(SettingsFooter, { busy: saving, dirty })))),
-    h('p', { className: 'zs-muted' }, '这里删除的是长期记忆条目，DSH 原始聊天历史另行管理。'),
+    h('p', { className: 'zs-muted' }, '公共记忆由所有私聊、群聊与自主生活共用。这里删除的是记忆条目，DSH 原始聊天历史另行管理。'),
   );
 }
 
-function MemePanel({ space, feedback }: { space: string; feedback: Feedback }): ReactNode {
+function MemePanel({ feedback }: { feedback: Feedback }): ReactNode {
   const [items, setItems] = useState<Meme[]>([]); const [total, setTotal] = useState(0); const [more, setMore] = useState(false); const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState(''); const [search, setSearch] = useState(''); const [offset, setOffset] = useState(0); const [selected, setSelected] = useState<Meme>();
   const [caption, setCaption] = useState(''); const [tag, setTag] = useState(''); const [words, setWords] = useState(''); const [upload, setUpload] = useState<File>();
   const [uploadCaption, setUploadCaption] = useState(''); const [uploadTag, setUploadTag] = useState(''); const [uploadWords, setUploadWords] = useState('');
   const importInput = useRef<HTMLInputElement>(null); const uploadInput = useRef<HTMLInputElement>(null); const task = useTask(feedback); const limit = 24;
   const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
-    const result = await request<{ items: Meme[]; total: number; hasMore: boolean }>(`/memes?${new URLSearchParams({ space, query: search, offset: String(offset), limit: String(limit) })}`, 'GET', undefined, signal);
+    const result = await request<{ items: Meme[]; total: number; hasMore: boolean }>(`/memes?${new URLSearchParams({ query: search, offset: String(offset), limit: String(limit) })}`, 'GET', undefined, signal);
     if (!signal?.aborted) { setItems(result.items); setTotal(result.total); setMore(result.hasMore); }
-  }, [space, search, offset]);
+  }, [search, offset]);
   useEffect(() => { const controller = new AbortController(); setLoading(true); setSelected(undefined); void load(controller.signal).catch(error => { if (!controller.signal.aborted) feedback(message(error), true); }).finally(() => { if (!controller.signal.aborted) setLoading(false); }); return () => controller.abort(); }, [load, feedback]);
-  useEffect(() => { setOffset(0); setUpload(undefined); setUploadCaption(''); setUploadTag(''); setUploadWords(''); if (uploadInput.current) uploadInput.current.value = ''; }, [space]);
   const edit = (item: Meme): void => { setSelected(item); setCaption(item.caption); setTag(item.tag ?? ''); setWords(keywords(item.keywords)); };
-  const save = (event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); if (!selected) return; void task.run(async () => { await request('/memes', 'PATCH', { space, id: selected.id, caption: caption.trim(), tag: tag.trim(), keywords: splitTags(words) }); setSelected(undefined); await load(); feedback('表情说明已保存。'); }); };
-  const add = (event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); void task.run(async () => { if (!upload) throw new Error('请先选择一张图片。'); const base64 = await readBase64(upload, 8 * 1024 * 1024); await request('/memes', 'POST', { space, fileName: upload.name, base64, caption: uploadCaption.trim(), tag: uploadTag.trim(), keywords: splitTags(uploadWords) }); setUpload(undefined); setUploadCaption(''); setUploadTag(''); setUploadWords(''); if (uploadInput.current) uploadInput.current.value = ''; await load(); feedback('表情已加入共享收藏。'); }); };
+  const save = (event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); if (!selected) return; void task.run(async () => { await request('/memes', 'PATCH', { id: selected.id, caption: caption.trim(), tag: tag.trim(), keywords: splitTags(words) }); setSelected(undefined); await load(); feedback('表情说明已保存。'); }); };
+  const add = (event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); void task.run(async () => { if (!upload) throw new Error('请先选择一张图片。'); const base64 = await readBase64(upload, 8 * 1024 * 1024); await request('/memes', 'POST', { fileName: upload.name, base64, caption: uploadCaption.trim(), tag: uploadTag.trim(), keywords: splitTags(uploadWords) }); setUpload(undefined); setUploadCaption(''); setUploadTag(''); setUploadWords(''); if (uploadInput.current) uploadInput.current.value = ''; await load(); feedback('表情已加入共享收藏。'); }); };
   const importZip = (file: File): void => { void task.run(async () => {
     const base64 = await readBase64(file, 80 * 1024 * 1024);
-    const result = await request<MemeImport>('/memes/import', 'POST', { space, base64 });
+    const result = await request<MemeImport>('/memes/import', 'POST', { base64 });
     let refreshWarning = '';
     try { await load(); } catch { refreshWarning = ' 收藏列表刷新失败，请手动刷新。'; }
     const incomplete = result.complete !== true || !!result.error || result.cancelled === true;
@@ -372,19 +372,19 @@ function MemePanel({ space, feedback }: { space: string; feedback: Feedback }): 
   return h('div', { className: 'zs-stack' },
     h('div', { className: 'zs-card zs-stack' }, h('div', { className: 'zs-row' }, h('h3', { className: 'zs-spacer' }, `表情图库 · ${total} 张`), h(Button, { disabled: loading || task.busy, onClick: () => { void task.run(async () => { await load(); feedback('图库已刷新。'); }); } }, '刷新')),
       h('form', { className: 'zs-search', onSubmit: (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); setOffset(0); setSearch(query.trim()); } }, h('input', { type: 'search', value: query, maxLength: 200, placeholder: '搜索表情、情绪或关键词', 'aria-label': '搜索表情', onChange: (event: ChangeEvent<HTMLInputElement>) => setQuery(event.target.value) }), h(Button, { type: 'submit', disabled: loading }, '搜索')),
-      loading ? h(Empty, null, '正在读取图库…') : items.length ? h('div', { className: 'zs-memes' }, items.map(item => h('button', { key: item.id, type: 'button', className: 'zs-meme', 'aria-pressed': selected?.id === item.id, onClick: () => edit(item) }, h(MediaImage, { space, item }), h('span', { className: 'zs-caption' }, item.caption || item.fileName || '未命名表情'), h('span', { className: 'zs-muted zs-small' }, item.builtin ? '内置图库' : item.tag || '我的收藏')))) : h(Empty, null, '没有匹配的表情，可以上传一张自己的图片。'),
+      loading ? h(Empty, null, '正在读取图库…') : items.length ? h('div', { className: 'zs-memes' }, items.map(item => h('button', { key: item.id, type: 'button', className: 'zs-meme', 'aria-pressed': selected?.id === item.id, onClick: () => edit(item) }, h(MediaImage, { item }), h('span', { className: 'zs-caption' }, item.caption || item.fileName || '未命名表情'), h('span', { className: 'zs-muted zs-small' }, item.builtin ? '内置图库' : item.tag || '我的收藏')))) : h(Empty, null, '没有匹配的表情，可以上传一张自己的图片。'),
       h('div', { className: 'zs-actions' }, h(Button, { disabled: loading || offset === 0, onClick: () => setOffset(Math.max(0, offset - limit)) }, '上一页'), h('span', { className: 'zs-muted zs-spacer' }, total ? `${offset + 1}–${Math.min(offset + items.length, total)} / ${total}` : '0 张'), h(Button, { disabled: loading || !more, onClick: () => setOffset(offset + limit) }, '下一页'))),
-    selected ? h('form', { className: 'zs-card zs-stack', onSubmit: save }, h('div', { className: 'zs-row' }, h('h3', { className: 'zs-spacer' }, selected.builtin ? '内置表情' : '编辑表情'), h(Button, { onClick: () => setSelected(undefined) }, '收起')), h('div', { className: 'zs-preview' }, h(MediaImage, { space, item: selected })),
+    selected ? h('form', { className: 'zs-card zs-stack', onSubmit: save }, h('div', { className: 'zs-row' }, h('h3', { className: 'zs-spacer' }, selected.builtin ? '内置表情' : '编辑表情'), h(Button, { onClick: () => setSelected(undefined) }, '收起')), h('div', { className: 'zs-preview' }, h(MediaImage, { item: selected })),
       selected.builtin ? h('div', { className: 'zs-stack' }, h('p', { className: 'zs-body' }, selected.caption), h('p', { className: 'zs-muted' }, `分类：${selected.tag || '未分类'}${keywords(selected.keywords) ? `　关键词：${keywords(selected.keywords)}` : ''}`), h('p', { className: 'zs-muted' }, '内置表情和收藏供所有私聊、群聊及自主生活共用。')) : h('fieldset', { disabled: task.busy, className: 'zs-stack' },
         h(Field, { label: '表情说明', children: h('textarea', { value: caption, required: true, maxLength: 500, rows: 3, onChange: (event: ChangeEvent<HTMLTextAreaElement>) => setCaption(event.target.value) }) }),
         h('div', { className: 'zs-grid' }, h(Field, { label: '分类', children: h('input', { value: tag, maxLength: 80, onChange: (event: ChangeEvent<HTMLInputElement>) => setTag(event.target.value) }) }), h(Field, { label: '关键词', children: h('input', { value: words, maxLength: 600, onChange: (event: ChangeEvent<HTMLInputElement>) => setWords(event.target.value) }) })),
-        h('div', { className: 'zs-actions' }, h(Button, { primary: true, type: 'submit', disabled: task.busy }, '保存说明'), h(Button, { danger: true, disabled: task.busy, onClick: () => { void task.run(async () => { await request('/memes', 'DELETE', { space, id: selected.id }); setSelected(undefined); await load(); feedback('表情已从共享收藏删除。'); }); } }, '删除表情')))) : null,
+        h('div', { className: 'zs-actions' }, h(Button, { primary: true, type: 'submit', disabled: task.busy }, '保存说明'), h(Button, { danger: true, disabled: task.busy, onClick: () => { void task.run(async () => { await request('/memes', 'DELETE', { id: selected.id }); setSelected(undefined); await load(); feedback('表情已从共享收藏删除。'); }); } }, '删除表情')))) : null,
     h('form', { className: 'zs-card zs-stack', onSubmit: add }, h('h3', null, '收藏新表情'), h('fieldset', { disabled: task.busy, className: 'zs-stack' },
       h(Field, { label: '图片', hint: '支持 PNG、JPG、WebP、GIF，最大 8 MiB。GIF 通过这里上传可保留原文件。', children: h('input', { ref: uploadInput, type: 'file', accept: '.png,.jpg,.jpeg,.webp,.gif', onChange: (event: ChangeEvent<HTMLInputElement>) => setUpload(event.target.files?.[0]) }) }),
       h(Field, { label: '表情说明', children: h('input', { value: uploadCaption, required: true, maxLength: 500, placeholder: '例如：开心地挥手打招呼', onChange: (event: ChangeEvent<HTMLInputElement>) => setUploadCaption(event.target.value) }) }),
       h('div', { className: 'zs-grid' }, h(Field, { label: '分类', children: h('input', { value: uploadTag, maxLength: 80, placeholder: '例如：开心', onChange: (event: ChangeEvent<HTMLInputElement>) => setUploadTag(event.target.value) }) }), h(Field, { label: '关键词', children: h('input', { value: uploadWords, maxLength: 600, placeholder: '你好，挥手，开心', onChange: (event: ChangeEvent<HTMLInputElement>) => setUploadWords(event.target.value) }) })), h('div', null, h(Button, { type: 'submit', primary: true, disabled: task.busy || !upload }, task.busy ? '处理中…' : '加入收藏')))),
     h('div', { className: 'zs-card zs-stack' }, h('h3', null, '图库导入与导出'), h('p', { className: 'zs-muted' }, '以 ZIP 保存或导入当前收藏。压缩包最大 80 MiB，解压内容合计最大 64 MiB。内置图库不受影响。'), h('input', { ref: importInput, type: 'file', accept: '.zip', style: { display: 'none' }, 'aria-label': '选择图库ZIP', onChange: (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) importZip(file); } }),
-      h('div', { className: 'zs-actions' }, h(Button, { disabled: task.busy, onClick: () => importInput.current?.click() }, '导入 ZIP'), h(Button, { disabled: task.busy, onClick: () => { void task.run(async () => { await download(`/memes/export?${new URLSearchParams({ space })}`, `${PLUGIN_NAME}-表情收藏.zip`); feedback('图库下载已开始。'); }); } }, '导出当前收藏'))),
+      h('div', { className: 'zs-actions' }, h(Button, { disabled: task.busy, onClick: () => importInput.current?.click() }, '导入 ZIP'), h(Button, { disabled: task.busy, onClick: () => { void task.run(async () => { await download('/memes/export', `${PLUGIN_NAME}-表情收藏.zip`); feedback('图库下载已开始。'); }); } }, '导出当前收藏'))),
   );
 }
 
@@ -409,11 +409,11 @@ function ProviderEditor({ provider, value, onChange }: { provider: Provider; val
   );
 }
 
-function SpeechPanel({ space, feedback, state, refreshState, draft, setDraft, save, saving, dirty }: SettingsEditorProps & { space: string; feedback: Feedback; state: State; refreshState: () => Promise<void> }): ReactNode {
+function SpeechPanel({ feedback, state, refreshState, draft, setDraft, save, saving, dirty }: SettingsEditorProps & { feedback: Feedback; state: State; refreshState: () => Promise<void> }): ReactNode {
   const [text, setText] = useState(''); const [provider, setProvider] = useState<Provider>(state.settings.speech.provider); const [items, setItems] = useState<Speech[]>([]); const [selected, setSelected] = useState<Speech>(); const [loading, setLoading] = useState(false); const task = useTask(feedback);
-  const load = useCallback(async (signal?: AbortSignal): Promise<void> => { const result = await request<{ items: Speech[] }>(`/speech?${new URLSearchParams({ space })}`, 'GET', undefined, signal); if (!signal?.aborted) setItems(result.items); }, [space]);
+  const load = useCallback(async (signal?: AbortSignal): Promise<void> => { const result = await request<{ items: Speech[] }>('/speech', 'GET', undefined, signal); if (!signal?.aborted) setItems(result.items); }, []);
   useEffect(() => { const controller = new AbortController(); setSelected(undefined); setItems([]); setLoading(true); void load(controller.signal).catch(error => { if (!controller.signal.aborted) feedback(message(error), true); }).finally(() => { if (!controller.signal.aborted) setLoading(false); }); return () => controller.abort(); }, [load, feedback]);
-  const generate = (event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); void task.run(async () => { const result = await request<{ result: Speech }>('/speech', 'POST', { space, text: text.trim(), provider }); setSelected(result.result); await load(); feedback('语音已生成，可以在下方试听。'); }); };
+  const generate = (event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); void task.run(async () => { const result = await request<{ result: Speech }>('/speech', 'POST', { text: text.trim(), provider }); setSelected(result.result); await load(); feedback('语音已生成，可以在下方试听。'); }); };
   const speech = draft.speech;
   return h('div', { className: 'zs-stack' },
     h('div', { className: 'zs-grid' }, (['mimo', 'minimax'] as const).map(service => h(CredentialCard, { key: service, provider: service, configured: state.credentials[service], feedback, onSaved: refreshState }))),
@@ -427,8 +427,8 @@ function SpeechPanel({ space, feedback, state, refreshState, draft, setDraft, sa
         h(Field, { label: '朗读内容', children: h('textarea', { value: text, required: true, rows: 4, maxLength: state.settings.speech.maxTextCharacters, placeholder: '写一段想听的话…', onChange: (event: ChangeEvent<HTMLTextAreaElement>) => setText(event.target.value) }) }),
         !state.settings.speech.enabled ? h('p', { className: 'zs-muted' }, '请先启用语音生成并保存设置。') : !state.credentials[provider] ? h('p', { className: 'zs-muted' }, `请先保存 ${PROVIDER_NAME[provider]} 的密钥。`) : null,
         h('div', { className: 'zs-actions' }, h(Button, { type: 'submit', primary: true, disabled: task.busy || !text.trim() || !state.settings.speech.enabled || !state.credentials[provider] }, task.busy ? '正在生成，请稍候…' : '生成试听'), h('span', { className: 'zs-muted' }, `${Array.from(text).length} / ${state.settings.speech.maxTextCharacters} 字`))),
-      selected ? h('div', { className: 'zs-stack' }, h('p', { className: 'zs-muted' }, `${PROVIDER_NAME[selected.provider]} · ${selected.voice} · ${date(selected.createdAt)}`), h(AudioPreview, { space, item: selected })) : null),
-    h('div', { className: 'zs-card zs-stack' }, h('div', { className: 'zs-row' }, h('h3', { className: 'zs-spacer' }, '最近生成'), h(Button, { disabled: loading || task.busy, onClick: () => { void task.run(async () => { await load(); feedback('语音记录已刷新。'); }); } }, '刷新')),
+      selected ? h('div', { className: 'zs-stack' }, h('p', { className: 'zs-muted' }, `${PROVIDER_NAME[selected.provider]} · ${selected.voice} · ${date(selected.createdAt)}`), h(AudioPreview, { item: selected })) : null),
+    h('div', { className: 'zs-card zs-stack' }, h('div', { className: 'zs-row' }, h('h3', { className: 'zs-spacer' }, '所有对话的语音记录'), h(Button, { disabled: loading || task.busy, onClick: () => { void task.run(async () => { await load(); feedback('语音记录已刷新。'); }); } }, '刷新')),
       loading ? h(Empty, null, '正在读取语音记录…') : items.length ? h('div', null, items.map(item => h('div', { className: 'zs-record', key: item.fileName }, h('div', { className: 'zs-record-head' }, h('div', null, h('p', { className: 'zs-record-title' }, `${PROVIDER_NAME[item.provider]} · ${item.voice}`), h('p', { className: 'zs-muted' }, `${date(item.createdAt)} · ${item.characters} 字 · ${Math.max(1, Math.round(item.bytes / 1024))} KB`)), h(Button, { onClick: () => setSelected(item) }, '试听'))))) : h(Empty, null, '还没有生成语音。')),
   );
 }
@@ -471,17 +471,46 @@ function LifePanel({ state, feedback, refreshState, draft, setDraft, save, savin
   );
 }
 
-function SecurityPanel({ draft, setDraft, save, saving, dirty }: SettingsEditorProps): ReactNode {
+function SecurityPanel({ draft, setDraft, save, saving, dirty, state, feedback, refreshState }: SettingsEditorProps & { state: State; feedback: Feedback; refreshState: () => Promise<void> }): ReactNode {
+  const task = useTask(feedback); const [selected, setSelected] = useState('');
+  const candidates = useMemo(() => {
+    const values = new Map<string, AdministratorCandidate>();
+    for (const candidate of state.administratorCandidates ?? []) {
+      const previous = values.get(candidate.senderId);
+      if (!previous || candidate.lastSeenAt >= previous.lastSeenAt) values.set(candidate.senderId, { ...candidate, name: candidate.name || previous?.name });
+      else if (!previous.name && candidate.name) values.set(candidate.senderId, { ...previous, name: candidate.name });
+    }
+    return [...values.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  }, [state.administratorCandidates]);
+  const administrators = draft.security.administrators;
+  const available = candidates.filter(candidate => candidate.observed && !administrators.includes(candidate.senderId));
+  useEffect(() => { if (selected && !available.some(candidate => candidate.senderId === selected)) setSelected(''); }, [available, selected]);
+  const shortId = (senderId: string): string => senderId.length > 10 ? `…${senderId.slice(-8)}` : senderId;
+  const userName = (candidate: AdministratorCandidate | undefined, senderId: string): string => candidate?.name?.trim() || `${candidate?.observed ? 'QQ 用户' : '已保存的管理员'} ${shortId(senderId)}`;
+  const originName = (candidate: AdministratorCandidate): string => candidate.scope === 'group'
+    ? state.conversations.find(item => item.scope === 'group' && item.peerId === candidate.peerId)?.alias || state.conversations.find(item => item.scope === 'group' && item.peerId === candidate.peerId)?.title || '群聊'
+    : '私聊';
+  const updateAdministrators = (values: string[]): void => setDraft({ ...draft, security: { ...draft.security, administrators: values } });
   return h('form', { className: 'zs-stack', onSubmit: save }, h('fieldset', { disabled: saving, className: 'zs-stack' },
-    h('div', { className: 'zs-card zs-stack' }, h('h3', null, 'QQ 管理员'),
-      h('p', { className: 'zs-muted' }, '使用 QQ 平台返回的真实发送者标识，每行一个。私聊和群内标识可能不同。只有管理员以 /admin 开头明确提出的请求可以修改配置、插件或调用宿主管理工具；普通聊天与自主活动使用受限权限。DSH 所有者始终可在此页面管理。'),
-      h(Field, { label: '管理员发送者标识', hint: '不能填写昵称、群号或冒充身份的消息文字。名单为空时，QQ 不能执行管理操作。', children: h('textarea', { value: draft.security.administrators.join('\n'), rows: 5, maxLength: 24000, onChange: (event: ChangeEvent<HTMLTextAreaElement>) => setDraft({ ...draft, security: { administrators: targetLines(event.target.value) } }) }) })),
+    h('div', { className: 'zs-card zs-stack' }, h('div', { className: 'zs-row' }, h('h3', { className: 'zs-spacer' }, 'QQ 管理员'),
+      h(Button, { disabled: task.busy, onClick: () => { void task.run(async () => { await refreshState(); feedback('可选用户已刷新。'); }); } }, task.busy ? '正在刷新…' : '刷新可选用户')),
+      h('p', { className: 'zs-muted' }, '从聊过天的用户中选择管理员，保存后生效。'),
+      h('div', { className: 'zs-stack' }, h(Field, { label: '添加管理员', children: h('select', { value: selected, disabled: task.busy || !available.length || administrators.length >= 100, onChange: (event: ChangeEvent<HTMLSelectElement>) => setSelected(event.target.value) },
+        h('option', { value: '' }, '选择一位聊过天的用户'), available.map(candidate => h('option', { key: candidate.senderId, value: candidate.senderId }, `${userName(candidate, candidate.senderId)} · ${originName(candidate)} · ${shortId(candidate.senderId)}`))) }),
+        h('div', null, h(Button, { disabled: task.busy || !selected || administrators.length >= 100, onClick: () => { if (!available.some(candidate => candidate.senderId === selected)) return; updateAdministrators([...new Set([...administrators, selected])]); setSelected(''); } }, '添加为管理员'))),
+      !candidates.some(candidate => candidate.observed) ? h('p', { className: 'zs-muted' }, '还没有可选用户。请让对方先给机器人发一条消息，再刷新。') : !available.length ? h('p', { className: 'zs-muted' }, '收到过消息的用户都已添加。') : null,
+      administrators.length >= 100 ? h('p', { className: 'zs-muted' }, '管理员名单已满，请先移除一位。') : null,
+      administrators.length ? h('ul', { 'aria-label': '当前管理员', style: { listStyle: 'none', margin: 0, padding: 0 } }, administrators.map(senderId => {
+        const candidate = candidates.find(item => item.senderId === senderId); const label = userName(candidate, senderId);
+        return h('li', { key: senderId, className: 'zs-record zs-row' }, h('div', { className: 'zs-spacer' }, h('p', { className: 'zs-record-title' }, label), h('p', { className: 'zs-muted zs-small' }, candidate?.observed ? originName(candidate) : '已保留原来的管理员设置')),
+          h('button', { type: 'button', className: 'zs-button zs-danger', 'aria-label': `移除管理员 ${label}`, disabled: task.busy, onClick: () => updateAdministrators(administrators.filter(value => value !== senderId)) }, '移除'));
+      })) : h('p', { className: 'zs-muted' }, '尚未设置管理员。')),
     h('div', { className: 'zs-card zs-stack' }, h('h3', null, '群聊回复节奏'),
       h('p', { className: 'zs-muted' }, '先收集连续消息，由 AI 决定是否回复。选择跳过时不会向 QQ 发送任何占位文字或内部进度。机器人只能接收 QQ 平台实际下发的消息。'),
       h('div', { className: 'zs-grid' },
         h(NumberField, { label: '收到最后一条后等待（毫秒）', value: draft.group.waitMs, min: 0, max: 10000, onChange: waitMs => setDraft({ ...draft, group: { ...draft.group, waitMs } }) }),
         h(NumberField, { label: '连续消息最多等待（毫秒）', value: draft.group.maxWaitMs, min: 1000, max: 30000, onChange: maxWaitMs => setDraft({ ...draft, group: { ...draft.group, maxWaitMs } }) }))),
-    h(SettingsFooter, { busy: saving, dirty })));
+    h(SettingsFooter, { busy: saving || task.busy, dirty })));
 }
 
 function ServiceCredential({ provider, state, feedback, refreshState }: { provider: 'cloudflare' | 'apimart'; state: State; feedback: Feedback; refreshState: () => Promise<void> }): ReactNode {
@@ -492,7 +521,7 @@ function ServiceCredential({ provider, state, feedback, refreshState }: { provid
     h('div', { className: 'zs-actions' }, h(Button, { type: 'submit', disabled: task.busy || !secret.trim() }, '保存密钥'), h(Button, { danger: true, disabled: task.busy || !state.credentials[provider], onClick: () => { void task.run(async () => { setSecret(''); await request('/credential', 'PUT', { provider, value: null }); await refreshState(); feedback(`${label} 已移除。`); }); } }, '移除密钥')));
 }
 
-function ServicesPanel({ state, feedback, refreshState, draft, setDraft, save, saving, dirty, space }: SettingsEditorProps & { state: State; feedback: Feedback; refreshState: () => Promise<void>; space: string }): ReactNode {
+function ServicesPanel({ state, feedback, refreshState, draft, setDraft, save, saving, dirty }: SettingsEditorProps & { state: State; feedback: Feedback; refreshState: () => Promise<void> }): ReactNode {
   const [browser, setBrowser] = useState<{ active: number; usedMsToday: number; cleanupPending: number }>(); const task = useTask(feedback);
   const refreshBrowser = useCallback(async (): Promise<void> => { const value = await request<{ browser: { active: number; usedMsToday: number; cleanupPending: number } }>('/services/status'); setBrowser(value.browser); }, []);
   useEffect(() => { void refreshBrowser().catch(error => feedback(message(error), true)); }, [refreshBrowser, feedback]);
@@ -526,37 +555,37 @@ function ServicesPanel({ state, feedback, refreshState, draft, setDraft, save, s
       h('div', { className: 'zs-actions' }, h(Button, { disabled: task.busy, onClick: () => { void task.run(refreshBrowser); } }, '刷新状态'),
         h(Button, { disabled: task.busy, onClick: () => { void task.run(async () => { const value = await request<{ closed: boolean }>('/browser/close', 'POST', {}); await refreshBrowser(); feedback(value.closed ? '本插件当前浏览器已关闭。' : '关闭请求已执行，仍有远端会话待确认，请重试资源清理。', !value.closed); }); } }, '关闭当前浏览器'),
         h(Button, { disabled: task.busy, onClick: () => { void task.run(async () => { await request('/browser/recover', 'POST', {}); await refreshBrowser(); feedback('已重试清理本插件遗留会话。'); }); } }, '重试资源清理'))),
-    h(ImageStudio, { space, feedback, enabled: state.settings.images.enabled }), h(DeploymentList, { space, feedback }));
+    h(ImageStudio, { feedback, enabled: state.settings.images.enabled }), h(DeploymentList, { feedback }));
 }
 
 interface GeneratedImage { id: string; taskId?: string; status: string; createdAt: string; mimeType?: string; delivery: string; selfPortrait: boolean; notice?: string }
-function ImageStudio({ space, feedback, enabled }: { space: string; feedback: Feedback; enabled: boolean }): ReactNode {
+function ImageStudio({ feedback, enabled }: { feedback: Feedback; enabled: boolean }): ReactNode {
   const [items, setItems] = useState<GeneratedImage[]>([]); const [prompt, setPrompt] = useState(''); const [selfPortrait, setSelfPortrait] = useState(false); const [selected, setSelected] = useState<GeneratedImage>(); const task = useTask(feedback);
-  const load = useCallback(async (signal?: AbortSignal): Promise<void> => { const value = await request<{ items: GeneratedImage[] }>(`/images?${new URLSearchParams({ space })}`, 'GET', undefined, signal); if (!signal?.aborted) setItems(value.items); }, [space]);
+  const load = useCallback(async (signal?: AbortSignal): Promise<void> => { const value = await request<{ items: GeneratedImage[] }>('/images', 'GET', undefined, signal); if (!signal?.aborted) setItems(value.items); }, []);
   useEffect(() => { const controller = new AbortController(); setSelected(undefined); void load(controller.signal).catch(error => { if (!controller.signal.aborted) feedback(message(error), true); }); return () => controller.abort(); }, [load, feedback]);
-  const media = useMedia(selected?.status === 'completed' ? `${API}/images/media?${new URLSearchParams({ space, id: selected.id })}` : undefined);
-  return h('div', { className: 'zs-card zs-stack' }, h('div', { className: 'zs-row' }, h('h3', { className: 'zs-spacer' }, '生成图片与记录'), h(Button, { disabled: task.busy, onClick: () => { void task.run(load); } }, '刷新记录')),
-    h('form', { className: 'zs-stack', onSubmit: (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void task.run(async () => { const value = await request<{ result: GeneratedImage }>('/images', 'POST', { space, prompt, selfPortrait }); await load(); setSelected(value.result); feedback(value.result.status === 'completed' ? '图片已生成，管理页不会发送至QQ。' : '图片任务已保存，可稍后查询结果。'); }); } },
+  const media = useMedia(selected?.status === 'completed' ? `${API}/images/media?${new URLSearchParams({ id: selected.id })}` : undefined);
+  return h('div', { className: 'zs-card zs-stack' }, h('div', { className: 'zs-row' }, h('h3', { className: 'zs-spacer' }, '所有对话的图片记录'), h(Button, { disabled: task.busy, onClick: () => { void task.run(load); } }, '刷新记录')),
+    h('form', { className: 'zs-stack', onSubmit: (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void task.run(async () => { const value = await request<{ result: GeneratedImage }>('/images', 'POST', { prompt, selfPortrait }); await load(); setSelected(value.result); feedback(value.result.status === 'completed' ? '图片已生成，管理页不会发送至QQ。' : '图片任务已保存，可稍后查询结果。'); }); } },
       h(Field, { label: '画面描述', children: h('textarea', { value: prompt, rows: 3, maxLength: 8000, disabled: task.busy, onChange: (event: ChangeEvent<HTMLTextAreaElement>) => setPrompt(event.target.value) }) }),
       h(Check, { label: '绘制自己的形象', hint: '自动附带已上传的人设原图。', checked: selfPortrait, disabled: task.busy, onChange: setSelfPortrait }),
       h('div', null, h(Button, { type: 'submit', primary: true, disabled: task.busy || !enabled || !prompt.trim() }, task.busy ? '正在处理，请稍候…' : '生成一张图片'))),
     media.objectUrl ? h('div', { className: 'zs-preview' }, h('img', { src: media.objectUrl, alt: selected?.selfPortrait ? '生成的自画像' : '生成图片', style: { maxWidth: '100%' } })) : null,
     items.length ? h('div', null, items.map(item => h('div', { key: item.id, className: 'zs-record' }, h('div', { className: 'zs-record-head' }, h('span', null, `${date(item.createdAt)} · ${item.selfPortrait ? '自画像' : '图片'} · ${item.status === 'completed' ? '已生成' : item.status === 'failed' ? '生成失败' : item.status === 'unknown' ? '提交结果待确认' : '处理中'}`),
-      item.status === 'completed' ? h(Button, { onClick: () => setSelected(item) }, '查看') : item.taskId ? h(Button, { disabled: task.busy, onClick: () => { void task.run(async () => { const value = await request<{ result: GeneratedImage }>('/images/status', 'POST', { space, id: item.id }); await load(); setSelected(value.result); }); } }, '查询已有任务') : null), item.notice ? h('p', { className: 'zs-muted' }, item.notice) : null))) : h('p', { className: 'zs-muted' }, '当前空间还没有生成图片。'));
+      item.status === 'completed' ? h(Button, { onClick: () => setSelected(item) }, '查看') : item.taskId ? h(Button, { disabled: task.busy, onClick: () => { void task.run(async () => { const value = await request<{ result: GeneratedImage }>('/images/status', 'POST', { id: item.id }); await load(); setSelected(value.result); }); } }, '查询已有任务') : null), item.notice ? h('p', { className: 'zs-muted' }, item.notice) : null))) : h('p', { className: 'zs-muted' }, '还没有生成图片，所有对话的生成记录会显示在这里。'));
 }
 
 interface DeploymentRecord { id: string; previewUrl?: string; status: string; expiresAt: string; createdAt: string }
-function DeploymentList({ space, feedback }: { space: string; feedback: Feedback }): ReactNode {
+function DeploymentList({ feedback }: { feedback: Feedback }): ReactNode {
   const [items, setItems] = useState<DeploymentRecord[]>([]); const [claim, setClaim] = useState<{ id: string; url: string }>(); const task = useTask(feedback);
-  const load = useCallback(async (signal?: AbortSignal): Promise<void> => { const value = await request<{ items: DeploymentRecord[] }>(`/deployments?${new URLSearchParams({ space })}`, 'GET', undefined, signal); if (!signal?.aborted) setItems(value.items); }, [space]);
+  const load = useCallback(async (signal?: AbortSignal): Promise<void> => { const value = await request<{ items: DeploymentRecord[] }>('/deployments', 'GET', undefined, signal); if (!signal?.aborted) setItems(value.items); }, []);
   useEffect(() => { const controller = new AbortController(); setClaim(undefined); void load(controller.signal).catch(error => { if (!controller.signal.aborted) feedback(message(error), true); }); return () => controller.abort(); }, [load, feedback]);
   return h('div', { className: 'zs-card zs-stack' }, h('div', { className: 'zs-row' }, h('h3', { className: 'zs-spacer' }, '临时网页'), h(Button, { disabled: task.busy, onClick: () => { void task.run(load); } }, '刷新记录')),
-    h('p', { className: 'zs-muted' }, '在 QQ 中请 AI 制作网页并临时部署，完成后可以在这里查看预览和认领。'),
+    h('p', { className: 'zs-muted' }, '所有对话的网页共用这份记录。在 QQ 中请 AI 制作网页并临时部署，完成后可以在这里查看预览和认领。'),
     items.length ? items.map(item => h('div', { key: item.id, className: 'zs-record zs-stack' }, h('p', null, `到期：${date(item.expiresAt)} · ${{ ready: '可访问', preparing: '准备中', deploying: '部署中', unknown: '结果待确认', failed: '失败', expired: '临时授权已到期', deleted: '已移除' }[item.status] || item.status}`),
       item.previewUrl ? h('a', { href: item.previewUrl, target: '_blank', rel: 'noreferrer noopener' }, '打开预览网页') : null,
-      h('div', { className: 'zs-actions' }, item.status === 'unknown' ? h(Button, { disabled: task.busy, onClick: () => { void task.run(async () => { await request('/deployments/status', 'POST', { space, id: item.id }); await load(); feedback('已查询原部署，没有重新创建账户。'); }); } }, '查询部署结果') : null, h(Button, { disabled: task.busy || item.status !== 'ready', onClick: () => { void task.run(async () => { const value = await request<{ claimUrl: string }>(`/deployments/claim?${new URLSearchParams({ id: item.id })}`); setClaim({ id: item.id, url: value.claimUrl }); }); } }, '查看认领链接'),
-        h(Button, { danger: true, disabled: task.busy, onClick: () => { void task.run(async () => { await request('/deployments', 'DELETE', { space, id: item.id }); setClaim(undefined); await load(); feedback('已移除临时部署。'); }); } }, '移除')),
-      claim?.id === item.id ? h('a', { href: claim.url, target: '_blank', rel: 'noreferrer noopener' }, '前往 Cloudflare 认领（请勿分享此链接）') : null)) : h('p', { className: 'zs-muted' }, '当前空间没有临时网页。'));
+      h('div', { className: 'zs-actions' }, item.status === 'unknown' ? h(Button, { disabled: task.busy, onClick: () => { void task.run(async () => { await request('/deployments/status', 'POST', { id: item.id }); await load(); feedback('已查询原部署，没有重新创建账户。'); }); } }, '查询部署结果') : null, h(Button, { disabled: task.busy || item.status !== 'ready', onClick: () => { void task.run(async () => { const value = await request<{ claimUrl: string }>(`/deployments/claim?${new URLSearchParams({ id: item.id })}`); setClaim({ id: item.id, url: value.claimUrl }); }); } }, '查看认领链接'),
+        h(Button, { danger: true, disabled: task.busy, onClick: () => { void task.run(async () => { await request('/deployments', 'DELETE', { id: item.id }); setClaim(undefined); await load(); feedback('已移除临时部署。'); }); } }, '移除')),
+      claim?.id === item.id ? h('a', { href: claim.url, target: '_blank', rel: 'noreferrer noopener' }, '前往 Cloudflare 认领（请勿分享此链接）') : null)) : h('p', { className: 'zs-muted' }, '还没有临时网页，所有对话的网页记录会显示在这里。'));
 }
 
 function backupPasswordHeader(password: string): string {
@@ -733,7 +762,7 @@ function BackupPanel({ feedback, onRestoreBusy }: { feedback: Feedback; onRestor
 /** One browser-only settings surface. No host runtime imports or credential persistence. */
 export function ZetaPanel(): ReactNode {
   useStyles();
-  const [state, setState] = useState<State>(); const [draft, setDraft] = useState<Settings>(); const [tab, setTab] = useState<Tab>('overview'); const [space, setSpace] = useState('self');
+  const [state, setState] = useState<State>(); const [draft, setDraft] = useState<Settings>(); const [tab, setTab] = useState<Tab>('overview');
   const [notice, setNotice] = useState<{ text: string; error: boolean }>(); const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false);
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [identityBusy, setIdentityBusy] = useState(false); const identityOperation = useRef<AbortController>(); const identityDraftRevision = useRef<number>();
@@ -768,13 +797,6 @@ export function ZetaPanel(): ReactNode {
       feedback(result.warning ? `设置已保存。${result.warning}` : '设置已保存，下次操作会使用新设置。'); await refreshState();
     }).catch(error => feedback(message(error), true)).finally(() => { savePending.current = false; setSaving(false); });
   };
-  const spaces = useMemo(() => {
-    const values = new Map<string, string>([['self', '主体自己的记忆与素材']]);
-    for (const binding of state?.bindings ?? []) values.set(binding.key, binding.title || `${binding.scope === 'group' ? '群聊' : '私聊'} ${binding.peerId}`);
-    for (const conversation of state?.conversations ?? []) if (values.has(conversation.key)) values.set(conversation.key, conversationName(conversation));
-    for (const entry of state?.spaces ?? []) if (!values.has(entry.key) && !entry.key.startsWith('self:')) values.set(entry.key, `已保存空间 · ${entry.key}`);
-    return [...values.entries()];
-  }, [state]);
   if (loading) return h('section', { className: 'zeta-settings', 'aria-label': `${PLUGIN_NAME}设置` }, h('p', { className: 'zs-loading', role: 'status' }, `正在读取 ${PLUGIN_NAME}…`));
   if (!state || !draft) return h('section', { className: 'zeta-settings zs-stack', 'aria-label': `${PLUGIN_NAME}设置` }, h('p', { role: 'alert' }, notice?.text || '暂时无法读取设置。'), h(Button, { onClick: () => { setLoading(true); void refreshState().catch(error => feedback(message(error), true)).finally(() => setLoading(false)); } }, '重新连接'));
   const editor = { draft, setDraft, save, saving: saving || identityBusy, dirty };
@@ -782,11 +804,11 @@ export function ZetaPanel(): ReactNode {
   if (tab === 'overview') content = h(Overview, { state, onNavigate: setTab });
   else if (tab === 'persona') content = h(PersonaPanel, { ...editor, feedback, identity: state.identity ?? { revision: 0, history: [] }, identityBusy, identityOutdated: state.identity?.revision !== identityDraftRevision.current, refreshIdentity: () => identityAction(false), resetIdentity: () => identityAction(true) });
   else if (tab === 'conversations') content = h(ConversationsPanel, { ...editor, state, feedback, refreshState });
-  else if (tab === 'memory') content = h(MemoryPanel, { ...editor, key: space, space, feedback });
-  else if (tab === 'memes') content = h(MemePanel, { space: 'self', feedback });
-  else if (tab === 'speech') content = h(SpeechPanel, { ...editor, key: space, space, feedback, state, refreshState });
-  else if (tab === 'security') content = h(SecurityPanel, editor);
-  else if (tab === 'services') content = h(ServicesPanel, { ...editor, state, space, feedback, refreshState });
+  else if (tab === 'memory') content = h(MemoryPanel, { ...editor, feedback });
+  else if (tab === 'memes') content = h(MemePanel, { feedback });
+  else if (tab === 'speech') content = h(SpeechPanel, { ...editor, feedback, state, refreshState });
+  else if (tab === 'security') content = h(SecurityPanel, { ...editor, state, feedback, refreshState });
+  else if (tab === 'services') content = h(ServicesPanel, { ...editor, state, feedback, refreshState });
   else if (tab === 'backup') content = h(BackupPanel, { feedback, onRestoreBusy: setRestoreBusy });
   else content = h(LifePanel, { ...editor, state, feedback, refreshState });
   return h('section', { className: 'zeta-settings', 'aria-label': `${PLUGIN_NAME}设置` },
@@ -800,7 +822,6 @@ export function ZetaPanel(): ReactNode {
         if (next < 0) return; event.preventDefault(); const selected = TABS[next]!; setTab(selected.id); document.getElementById(`${tabPrefix}-${selected.id}-tab`)?.focus();
       },
     }, item.label))),
-    ['memory', 'speech', 'services'].includes(tab) ? h('div', { className: 'zs-scope' }, h(Field, { label: '当前管理空间', hint: '记忆、语音、生成图片和网页记录按空间显示；表情和人设图全局共享。', children: h('select', { value: space, onChange: (event: ChangeEvent<HTMLSelectElement>) => setSpace(event.target.value) }, spaces.map(([value, label]) => h('option', { key: value, value }, label))) })) : null,
     h('div', { id: `${tabPrefix}-panel`, role: 'tabpanel', 'aria-labelledby': `${tabPrefix}-${tab}-tab` }, content),
     h('p', { className: 'zs-muted zs-small', style: { marginTop: 20 } }, `${PLUGIN_NAME} ${state.version}`),
   );

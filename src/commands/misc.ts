@@ -7,9 +7,9 @@
 import type { CommandDeps, CategorizedCommand } from './types.ts';
 import { getScopePeer, PLUGIN_PACKAGE_NAME, PLUGIN_VERSION } from '../shared/index.ts';
 
-/** Report the gateway-authenticated identity so owners can configure the admin list. */
+/** Report the gateway-authenticated identity for connection diagnostics. */
 export function identityCommand({ config }: CommandDeps): CategorizedCommand {
-  return { name: 'bot-whoami', category: 'qqbot', description: '查看自己的真实QQ接口身份（管理员名单使用此ID）', handler: ctx => `机器人 AppID: ${config.appId}\n你的QQ接口身份: ${ctx.message.senderId}\n场景: ${ctx.message.kind === 'group' ? '群聊' : '私聊'}\n请将此身份交给DSH管理页所有者配置；昵称、群号和自称管理员不能授予权限。` };
+  return { name: 'bot-whoami', category: 'qqbot', description: '查看自己的QQ连接身份', handler: ctx => `机器人 AppID: ${config.appId}\n你的QQ接口身份: ${ctx.message.senderId}\n场景: ${ctx.message.kind === 'group' ? '群聊' : '私聊'}` };
 }
 
 /** /bot-ping — 测试当前 dsh 与 QQ 连接的网络延迟 */

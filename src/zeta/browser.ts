@@ -3,6 +3,8 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import type { ModuleExecution, ModuleHost } from './contracts.ts';
+import { PUBLIC_SPACE } from './state.ts';
+import { materialActorKey } from './shared-materials.ts';
 
 export interface ExternalModuleHost extends ModuleHost {
   resolveServiceKey(provider: 'cloudflare' | 'apimart'): Promise<string>;
@@ -24,9 +26,9 @@ export class ServiceError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = 'ServiceError'; }
 }
 export function scopeFor(host: ModuleHost, agent: unknown): string {
+  if (host.spaceFor) return host.spaceFor(agent);
   const binding = host.bindingFor(agent);
-  if (binding) return binding.key;
-  if (host.isLifeAgent(agent)) return 'self:zeta';
+  if (binding || host.isLifeAgent(agent)) return PUBLIC_SPACE;
   throw new ServiceError('NO_SCOPE', '当前会话尚未关联 dsh-feiyu-zeta。');
 }
 export const serviceHash = (value: string | Buffer): string => createHash('sha256').update(value).digest('hex');
@@ -110,7 +112,7 @@ export interface BrowserOptions {
   beforeBrowse?: (input: BrowserInput, exec: ModuleExecution) => void | Promise<void>;
 }
 interface Lease {
-  id: string; remote: string; owner: string; accountId: string; browser: Browser; context: BrowserContext; page: Page;
+  id: string; remote: string; owner: string; actor: string; accountId: string; browser: Browser; context: BrowserContext; page: Page;
   startedAt: number; reservedMs: number; day: string; busy: boolean; hardTimer: ReturnType<typeof setTimeout>; idleTimer?: ReturnType<typeof setTimeout>;
   closing?: Promise<boolean>;
 }
@@ -167,7 +169,7 @@ export class BrowserService {
     }
     return false;
   }
-  private async acquire(owner: string, settings: BrowserSettings, signal: AbortSignal): Promise<Lease> {
+  private async acquire(owner: string, actor: string, settings: BrowserSettings, signal: AbortSignal): Promise<Lease> {
     return this.serial(async () => {
       serviceAbort(signal);
       if (this.stopped) throw new ServiceError('STOPPED', '浏览器服务已停止。');
@@ -206,7 +208,7 @@ export class BrowserService {
         const page = await context.newPage();
         page.setDefaultTimeout(settings.actionTimeoutMs);
         const id = randomUUID();
-        const lease: Lease = { id, remote, owner, accountId: settings.accountId, browser, context, page, startedAt, reservedMs, day, busy: false,
+        const lease: Lease = { id, remote, owner, actor, accountId: settings.accountId, browser, context, page, startedAt, reservedMs, day, busy: false,
           hardTimer: setTimeout(() => { void this.closeLease(id).catch(() => {}); }, Math.max(1, reservedMs - (Date.now() - startedAt))) };
         lease.hardTimer.unref();
         this.leases.set(id, lease);
@@ -249,6 +251,7 @@ export class BrowserService {
   }
   async run(input: BrowserInput, exec: ModuleExecution): Promise<Record<string, unknown>> {
     const owner = scopeFor(this.host, exec.agent);
+    const actor = materialActorKey(this.host, exec.agent);
     serviceAbort(exec.signal);
     const settings = await this.getSettings(); this.settings(settings);
     if (!input || !Array.isArray(input.actions) || !input.actions.length || input.actions.length > 20 ||
@@ -265,8 +268,8 @@ export class BrowserService {
     await this.options.beforeBrowse?.(input, exec);
     this.host.requireWritable?.();
     let lease = input.session ? this.leases.get(input.session) : undefined;
-    if (input.session && (!lease || lease.owner !== owner || lease.closing)) throw new ServiceError('NO_SESSION', '此浏览器会话不存在、已过期或不属于当前对话。');
-    if (!lease) lease = await this.acquire(owner, settings, exec.signal);
+    if (input.session && (!lease || lease.actor !== actor || lease.closing)) throw new ServiceError('NO_SESSION', '此浏览器会话不存在、已过期或不属于当前任务。');
+    if (!lease) lease = await this.acquire(owner, actor, settings, exec.signal);
     if (lease.busy) throw new ServiceError('BUSY', '当前浏览器仍有操作执行中。');
     lease.busy = true; clearTimeout(lease.idleTimer);
     const current = lease;
@@ -313,13 +316,15 @@ export class BrowserService {
   }
   async close(session: string, exec: ModuleExecution): Promise<Record<string, unknown>> {
     const lease = this.leases.get(session);
-    if (!lease || lease.owner !== scopeFor(this.host, exec.agent)) throw new ServiceError('NO_SESSION', '浏览器会话不可用。');
+    scopeFor(this.host, exec.agent);
+    if (!lease || lease.actor !== materialActorKey(this.host, exec.agent)) throw new ServiceError('NO_SESSION', '浏览器会话不可用。');
     const closed = await this.closeLease(session); return { closed, cleanupPending: !closed,
       ...(!closed ? { notice: '远端关闭未确认，已保留清理记录；管理页可重试清理。' } : {}) };
   }
   async closeForAgent(agent: unknown): Promise<void> {
-    const owner = scopeFor(this.host, agent);
-    await Promise.all([...this.leases.values()].filter(item => item.owner === owner).map(item => this.closeLease(item.id)));
+    scopeFor(this.host, agent);
+    const actor = materialActorKey(this.host, agent);
+    await Promise.all([...this.leases.values()].filter(item => item.actor === actor).map(item => this.closeLease(item.id)));
   }
   async status(): Promise<Record<string, unknown>> {
     const ledger = await this.ledger();
