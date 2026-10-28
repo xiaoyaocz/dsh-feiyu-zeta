@@ -143,10 +143,14 @@ interface IdentityWriteContext {
     signal?: AbortSignal;
     beforeCommit?: () => void;
 }
-interface SettingsWriteOptions {
+interface SettingsWriteOptions extends IdentityWriteContext {
     expectedIdentityRevision?: number;
     preserveIdentity?: boolean;
     reason?: string;
+    onCommitted?: (snapshot: {
+        settings: ZetaSettings;
+        identity: IdentityView;
+    }) => void;
 }
 declare const memorySchema: z.ZodObject<{
     key: z.ZodString;
@@ -475,6 +479,9 @@ export declare class ZetaState {
     updateIdentity(input: IdentityUpdate, context?: IdentityWriteContext): Promise<IdentityView>;
     resetIdentity(expectedRevision?: number): Promise<IdentityView>;
     setSettings(value: unknown, options?: SettingsWriteOptions): Promise<ZetaSettings>;
+    /** Merge against the latest committed values inside the shared settings queue. */
+    patchSettings(changes: unknown, options?: SettingsWriteOptions): Promise<ZetaSettings>;
+    private commitSettings;
     get speech(): SpeechSettings;
     bindings(): ConversationBinding[];
     binding(sessionId: string): ConversationBinding | undefined;

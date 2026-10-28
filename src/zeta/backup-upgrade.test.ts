@@ -104,7 +104,7 @@ async function fixture(version: string, inputs: Record<string, Buffer>) {
   return { directory, state, privateService, preview, expectedIdentity, expectedUsers };
 }
 describe('0.4 backup upgrade and new material boundaries', () => {
-  it.each(['0.3.0', '0.4.0', '0.4.1', '0.4.2', '0.4.3'])('previews and restores an encrypted %s archive with additive defaults and no automatic external activity', async version => {
+  it.each(['0.3.0', '0.4.0', '0.4.1', '0.4.2', '0.4.3', '0.4.4', '0.4.5', '0.4.6', '0.4.7'])('previews and restores an encrypted %s archive with additive defaults and no automatic external activity', async version => {
     const files = { 'data/memes/old-library/image.gif': Buffer.from('legacy exact gif bytes') };
     const f = await fixture(version, files), stage = await f.preview();
     expect(stage.preview.canRestore).toBe(true);
@@ -115,7 +115,7 @@ describe('0.4 backup upgrade and new material boundaries', () => {
     expect(f.state.settings.life.enabled).toBe(false); expect(f.state.settings.life.allowContact).toBe(false);
     expect(f.state.settings.browser.enabled).toBe(false); expect(f.state.settings.images.enabled).toBe(false); expect(f.state.settings.deployments.enabled).toBe(false);
     expect(f.state.settings.security.administrators).toEqual(version === '0.3.0' ? [] : ['trusted-owner-id']);
-    expect(f.state.users()).toEqual(['0.4.2', '0.4.3'].includes(version) ? f.expectedUsers : []);
+    expect(f.state.users()).toEqual(['0.3.0', '0.4.0', '0.4.1'].includes(version) ? [] : f.expectedUsers);
     if (version === '0.4.2') {
       const memories = f.state.listMemory('any-legacy-space');
       expect(memories.map(entry => entry.value).sort()).toEqual(['来自私聊的事实', '来自群聊的另一事实'].sort());
@@ -154,6 +154,14 @@ describe('0.4 backup upgrade and new material boundaries', () => {
     const f = await fixture(PLUGIN_VERSION, { 'data/browser/usage.json': Buffer.from('{"orphans":[{"remote":"live-session"}]}') });
     await expect(f.preview()).rejects.toThrow('迁移包校验失败');
     expect(restoreSessions).not.toHaveBeenCalled(); expect(f.state.migration).toBeUndefined();
+  });
+
+  it('restores shared QQ model/preset preferences together with untouched legacy choices and per-chat history ids', async () => {
+    const preferences = { overrides: { 'qqbot:bot:shared': { provider: 'shared-provider', model: 'shared-model' }, 'qqbot:bot:c2c:alice': { provider: 'legacy-provider', model: 'legacy-model' } },
+      presets: { 'qqbot:bot:shared': 'shared-preset', 'qqbot:bot:group:room': 'legacy-preset' }, sessionIds: { 'qqbot:bot:c2c:alice': 'original-history-id' } };
+    const f = await fixture(PLUGIN_VERSION, { 'qq-prefs.json': Buffer.from(JSON.stringify(preferences)) }), stage = await f.preview();
+    expect(stage.preview.canRestore).toBe(true); await f.privateService.restore(stage);
+    expect(JSON.parse(await readFile(join(process.env.DSH_HOME!, 'zeta', 'qq-model-prefs.json'), 'utf8'))).toEqual(preferences);
   });
 
   it('refuses to overwrite a target with autonomous identity history even when it has no chats or media', async () => {

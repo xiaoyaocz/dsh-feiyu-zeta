@@ -5,7 +5,7 @@ import { ensureCredentials, persistCredentialsToProfile, registerBoundCredential
 import { createZeta } from "./zeta/index.js";
 // ── Cordis 插件元数据 ──
 export const name = 'dsh-feiyu-zeta';
-export const inject = ['agents', 'sessions', 'tools', 'systemPrompt', 'storageDomain', 'credentials', 'schedule', 'sessionController', 'sessionPersistence', 'attachments', 'agentPresets', 'connection', 'configEditor', 'settings', 'llm'];
+export const inject = ['agents', 'sessions', 'tools', 'systemPrompt', 'storageDomain', 'credentials', 'schedule', 'sessionController', 'sessionPersistence', 'sessionQuery', 'sessionProjections', 'attachments', 'agentPresets', 'connection', 'configEditor', 'settings', 'llm'];
 export const Config = ConfigSchema;
 // ── 插件主体 ──
 export async function apply(ctx, config) {

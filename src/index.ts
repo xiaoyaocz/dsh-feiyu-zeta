@@ -16,7 +16,7 @@ import { createZeta } from './zeta/index.ts';
 
 // ── Cordis 插件元数据 ──
 export const name = 'dsh-feiyu-zeta';
-export const inject = ['agents', 'sessions', 'tools', 'systemPrompt', 'storageDomain', 'credentials', 'schedule', 'sessionController', 'sessionPersistence', 'attachments', 'agentPresets', 'connection', 'configEditor', 'settings', 'llm'];
+export const inject = ['agents', 'sessions', 'tools', 'systemPrompt', 'storageDomain', 'credentials', 'schedule', 'sessionController', 'sessionPersistence', 'sessionQuery', 'sessionProjections', 'attachments', 'agentPresets', 'connection', 'configEditor', 'settings', 'llm'];
 export const Config = ConfigSchema;
 
 export type { ImQQBotConfig } from './config.ts';

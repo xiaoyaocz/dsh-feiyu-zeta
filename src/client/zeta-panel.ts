@@ -1,5 +1,6 @@
 import { createElement as h, useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import { ZETA_API_PATH } from '../shared/http-paths.ts';
+import { rebaseSettingsDraft, settingsChanges } from './settings-draft.ts';
 
 type Provider = 'mimo' | 'minimax';
 interface ProviderSettings { model: string; voice: string; speed: number; emotion?: string }
@@ -763,18 +764,25 @@ function BackupPanel({ feedback, onRestoreBusy }: { feedback: Feedback; onRestor
 /** One browser-only settings surface. No host runtime imports or credential persistence. */
 export function ZetaPanel(): ReactNode {
   useStyles();
-  const [state, setState] = useState<State>(); const [draft, setDraft] = useState<Settings>(); const [tab, setTab] = useState<Tab>('overview');
+  const [state, setState] = useState<State>(); const [draft, setDraftState] = useState<Settings>(); const [tab, setTab] = useState<Tab>('overview');
+  const draftValue = useRef<Settings>(); const draftBaseline = useRef<Settings>();
+  const setDraft = useCallback((value: Settings | ((current: Settings | undefined) => Settings | undefined)): void => {
+    const next = typeof value === 'function' ? value(draftValue.current) : value;
+    draftValue.current = next; setDraftState(next);
+  }, []);
   const [notice, setNotice] = useState<{ text: string; error: boolean }>(); const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false);
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [identityBusy, setIdentityBusy] = useState(false); const identityOperation = useRef<AbortController>(); const identityDraftRevision = useRef<number>();
   const savePending = useRef(false); const tabPrefix = useId();
   const feedback = useCallback<Feedback>((text, error = false) => setNotice({ text, error }), []);
   const refreshState = useCallback(async (): Promise<void> => { const result = await request<State>('/state'); setState(result); setDraft(current => {
-    const value = current ?? structuredClone(result.settings);
-    if (value.name === result.settings.name && value.persona === result.settings.persona && JSON.stringify(value.habits ?? []) === JSON.stringify(result.settings.habits ?? [])) identityDraftRevision.current = result.identity?.revision;
-    return value;
-  }); }, []);
-  useEffect(() => { const controller = new AbortController(); void request<State>('/state', 'GET', undefined, controller.signal).then(result => { if (!controller.signal.aborted) { setState(result); setDraft(structuredClone(result.settings)); identityDraftRevision.current = result.identity?.revision; } }).catch(error => { if (!controller.signal.aborted) feedback(message(error), true); }).finally(() => { if (!controller.signal.aborted) setLoading(false); }); return () => { controller.abort(); identityOperation.current?.abort(); }; }, [feedback]);
+    const baseline = draftBaseline.current ?? current ?? result.settings;
+    const changes = settingsChanges(baseline, current ?? baseline);
+    if (!['name', 'persona', 'habits'].some(key => Object.hasOwn(changes, key))) identityDraftRevision.current = result.identity?.revision;
+    draftBaseline.current = structuredClone(result.settings);
+    return rebaseSettingsDraft(baseline, current ?? baseline, result.settings);
+  }); }, [setDraft]);
+  useEffect(() => { const controller = new AbortController(); void request<State>('/state', 'GET', undefined, controller.signal).then(result => { if (!controller.signal.aborted) { setState(result); draftBaseline.current = structuredClone(result.settings); setDraft(structuredClone(result.settings)); identityDraftRevision.current = result.identity?.revision; } }).catch(error => { if (!controller.signal.aborted) feedback(message(error), true); }).finally(() => { if (!controller.signal.aborted) setLoading(false); }); return () => { controller.abort(); identityOperation.current?.abort(); }; }, [feedback, setDraft]);
   const identityAction = (reset: boolean): void => {
     if (identityOperation.current || savePending.current || restoreBusy) return;
     const controller = new AbortController(); identityOperation.current = controller; setIdentityBusy(true);
@@ -782,6 +790,7 @@ export function ZetaPanel(): ReactNode {
       if (controller.signal.aborted) return;
       const fields = { name: value.name, persona: value.persona, habits: [...value.habits] };
       identityDraftRevision.current = value.revision;
+      if (draftBaseline.current) draftBaseline.current = { ...draftBaseline.current, ...fields };
       setDraft(current => current ? { ...current, ...fields } : current);
       setState(current => current ? { ...current, settings: { ...current.settings, ...fields }, identity: { revision: value.revision, updatedAt: value.updatedAt, history: value.history } } : current);
       feedback(reset ? '已恢复最新默认人设。其他功能的设置与未保存草稿保持不变。' : '已载入最新名字、人设和习惯。其他功能的草稿已保留。');
@@ -792,8 +801,12 @@ export function ZetaPanel(): ReactNode {
     event.preventDefault(); if (!draft || savePending.current || restoreBusy || identityOperation.current) return;
     if ((draft.habits ?? []).length > 30 || (draft.habits ?? []).some(habit => habit.length > 300)) { feedback('习惯最多30条，每条最多300字。', true); return; }
     const submitted = structuredClone(draft); savePending.current = true; setSaving(true);
-    void request<{ settings: Settings; warning?: string }>('/settings', 'PUT', submitted, undefined, identityDraftRevision.current === undefined ? undefined : { 'x-zeta-identity-revision': String(identityDraftRevision.current) }).then(async result => {
-      setDraft(current => current && JSON.stringify(current) !== JSON.stringify(submitted) ? current : structuredClone(result.settings));
+    const changes = settingsChanges(draftBaseline.current ?? state?.settings, submitted);
+    const identityChanged = ['name', 'persona', 'habits'].some(key => Object.hasOwn(changes, key));
+    void request<{ settings: Settings; identity?: IdentitySummary; warning?: string }>('/settings', 'PATCH', changes, undefined, !identityChanged || identityDraftRevision.current === undefined ? undefined : { 'x-zeta-identity-revision': String(identityDraftRevision.current) }).then(async result => {
+      draftBaseline.current = structuredClone(result.settings);
+      if (result.identity) identityDraftRevision.current = result.identity.revision;
+      setDraft(current => rebaseSettingsDraft(submitted, current ?? submitted, result.settings));
       setState(current => current ? { ...current, settings: result.settings } : current);
       feedback(result.warning ? `设置已保存。${result.warning}` : '设置已保存，下次操作会使用新设置。'); await refreshState();
     }).catch(error => feedback(message(error), true)).finally(() => { savePending.current = false; setSaving(false); });
@@ -813,7 +826,7 @@ export function ZetaPanel(): ReactNode {
   else if (tab === 'backup') content = h(BackupPanel, { feedback, onRestoreBusy: setRestoreBusy });
   else content = h(LifePanel, { ...editor, state, feedback, refreshState });
   return h('section', { className: 'zeta-settings', 'aria-label': `${PLUGIN_NAME}设置` },
-    h('div', { className: 'zs-head' }, h('div', null, h('h2', null, PLUGIN_NAME), h('p', { className: 'zs-muted' }, '一起聊天，也有自己的生活')), h('div', { className: 'zs-actions' }, dirty ? h(Button, { disabled: saving || restoreBusy || identityBusy, onClick: () => { setDraft(structuredClone(state.settings)); identityDraftRevision.current = state.identity?.revision; feedback('已恢复为上次保存的设置。'); } }, '放弃未保存修改') : null, h(Button, { disabled: saving || restoreBusy || identityBusy, onClick: () => { void refreshState().then(() => feedback('状态已刷新，未保存的修改会保留。')).catch(error => feedback(message(error), true)); } }, '刷新'))),
+    h('div', { className: 'zs-head' }, h('div', null, h('h2', null, PLUGIN_NAME), h('p', { className: 'zs-muted' }, '一起聊天，也有自己的生活')), h('div', { className: 'zs-actions' }, dirty ? h(Button, { disabled: saving || restoreBusy || identityBusy, onClick: () => { draftBaseline.current = structuredClone(state.settings); setDraft(structuredClone(state.settings)); identityDraftRevision.current = state.identity?.revision; feedback('已恢复为最新读取的公共设置。'); } }, '放弃未保存修改') : null, h(Button, { disabled: saving || restoreBusy ||identityBusy, onClick: () => { void refreshState().then(() => feedback('公共状态已刷新，未修改的设置已同步，本地修改已保留。')).catch(error => feedback(message(error), true)); } }, '刷新'))),
     notice ? h('div', { className: `zs-notice${notice.error ? ' zs-error' : ''}`, role: notice.error ? 'alert' : 'status', 'aria-live': 'polite' }, notice.text) : null,
     h('div', { className: 'zs-tabs', role: 'tablist', 'aria-label': `${PLUGIN_NAME}功能` }, TABS.map((item, index) => h('button', {
       key: item.id, id: `${tabPrefix}-${item.id}-tab`, type: 'button', role: 'tab', className: 'zs-tab', disabled: restoreBusy, tabIndex: tab === item.id ? 0 : -1, 'aria-selected': tab === item.id, 'aria-controls': `${tabPrefix}-panel`, onClick: () => setTab(item.id),

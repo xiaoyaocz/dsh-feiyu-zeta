@@ -3,6 +3,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { ChatScope, ReplyTarget } from '../types.ts';
+import type { ModelRoute } from '../model/types.ts';
 
 /** AgentSetup hook 类型 */
 export type AgentSetup = (agentCtx: Context) => Promise<void> | void;
@@ -26,10 +27,13 @@ export interface DshAgent {
   readonly ctx: Context;
   /** 当前生命周期状态（用于判断是否正在生成） */
   readonly status: 'idle' | 'running';
+  readonly options?: { provider?: string; model?: string };
   /** 底层 session（fork 时作为 source，events 用于统计/导出） */
   readonly session: {
     readonly id: string;
     readonly events?: readonly SessionEventLike[];
+    readonly header?: { agentPreset?: string };
+    requestHeader?(): { config: { provider: string; model: string } } | undefined;
   };
   cancel(cause: { kind: string }): void;
   followup(message: unknown): void;
@@ -103,6 +107,7 @@ export interface AgentPresetsLike {
   list(): Promise<Array<{ id: string; name?: string; description?: string; broken?: string }>>;
   /** 从 agent 的 preset scope 解析隔离服务（如 compaction），未挂载返回 undefined */
   serviceFor(agent: { ctx: Context }, name: string): unknown | undefined;
+  composedPreset?(ctx: Context): string | undefined;
 }
 
 /** 可用 preset 条目（/preset 命令展示用） */
@@ -130,6 +135,8 @@ export interface SessionRecord {
   senderId: string;
   lastActivity: number;
   agentPreset?: string;
+  /** Last native model selection accepted while this Agent was idle. */
+  selectedModel?: ModelRoute;
   /** Only the current QQ request may emit automatic text or files. */
   requestSignal?: AbortSignal;
   abortRequest?: () => void;
@@ -143,6 +150,9 @@ export interface SessionStatus {
   provider?: string;
   model?: string;
   preset?: string;
+  defaultProvider?: string;
+  defaultModel?: string;
+  defaultPreset?: string;
   lastActivity?: number;
   messageCount?: number;
 }

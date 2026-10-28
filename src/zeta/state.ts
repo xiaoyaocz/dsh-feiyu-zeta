@@ -4,6 +4,7 @@ import { defineDomain, domainTable, type Domain } from '@deepseek-ai/dsh-storage
 import { z } from 'zod';
 import type { ConversationBinding, ConversationRecord, SpeechSettings } from './contracts.ts';
 import { DEFAULT_IDENTITY, LEGACY_DEFAULT_NAME, LEGACY_DEFAULT_PERSONA } from './identity-defaults.ts';
+import { mergeSettingsPatch } from '../shared/settings-patch.ts';
 
 const target = z.string().regex(/^(c2c|group):[^\s:]+$/).max(240);
 const provider = z.object({ model: z.string().min(1).max(160), voice: z.string().min(1).max(240), speed: z.number().min(0.5).max(2), emotion: z.string().max(80).optional() }).strict();
@@ -33,7 +34,7 @@ export type IdentityView = IdentityProfile & Omit<IdentityRecord, 'current'>;
 export const identityUpdateSchema = z.object({ expected_revision: z.number().int().nonnegative(), reason: z.string().trim().min(1).max(500), name: identityProfileSchema.shape.name.optional(), persona: identityProfileSchema.shape.persona.optional(), habits: identityProfileSchema.shape.habits.optional() }).strict().refine(value => value.name !== undefined || value.persona !== undefined || value.habits !== undefined, '至少提供名字、人设或习惯中的一项');
 export type IdentityUpdate = z.infer<typeof identityUpdateSchema>;
 interface IdentityWriteContext { sourceSessionId?: string; signal?: AbortSignal; beforeCommit?: () => void }
-interface SettingsWriteOptions { expectedIdentityRevision?: number; preserveIdentity?: boolean; reason?: string }
+interface SettingsWriteOptions extends IdentityWriteContext { expectedIdentityRevision?: number; preserveIdentity?: boolean; reason?: string; onCommitted?: (snapshot: { settings: ZetaSettings; identity: IdentityView }) => void }
 function profileOf(value: Pick<ZetaSettings, 'name' | 'persona' | 'habits'>): IdentityProfile { return identityProfileSchema.parse({ name: value.name, persona: value.persona, habits: value.habits }); }
 function sameProfile(left: IdentityProfile, right: IdentityProfile): boolean { return JSON.stringify(left) === JSON.stringify(right); }
 function initialIdentity(value: ZetaSettings): IdentityRecord {
@@ -180,14 +181,30 @@ export class ZetaState {
   resetIdentity(expectedRevision = this.identity.revision): Promise<IdentityView> { return this.updateIdentity({ ...DEFAULT_IDENTITY, habits: [...DEFAULT_IDENTITY.habits], expected_revision: expectedRevision, reason: '管理页恢复默认大肥鱼预设' }); }
   async setSettings(value: unknown, options: SettingsWriteOptions = {}): Promise<ZetaSettings> {
     const parsed = settingsSchema.parse(value);
+    return this.serializeSettings(() => this.commitSettings(parsed, options));
+  }
+  /** Merge against the latest committed values inside the shared settings queue. */
+  patchSettings(changes: unknown, options: SettingsWriteOptions = {}): Promise<ZetaSettings> {
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) return Promise.reject(new Error('请提供有效的局部设置对象'));
+    const patch = structuredClone(changes);
+    const identityChanged = ['name', 'persona', 'habits'].some(key => Object.hasOwn(patch, key));
     return this.serializeSettings(async () => {
-      const record = this.domain.table('identity').get('main')!;
-      const profile = options.preserveIdentity ? structuredClone(record.current) : profileOf(parsed);
-      if (options.expectedIdentityRevision !== undefined && options.expectedIdentityRevision !== record.revision) throw new Error('人设已变化，请刷新当前身份后再保存');
-      await this.domain.table('settings').put('main', { ...parsed, ...record.current });
-      if (!sameProfile(record.current, profile)) await this.commitIdentity(profile, options.expectedIdentityRevision ?? record.revision, options.reason ?? '管理设置调整名字、人设或习惯');
-      return this.settings;
+      options.signal?.throwIfAborted(); options.beforeCommit?.();
+      const parsed = settingsSchema.parse(mergeSettingsPatch(this.settings, patch));
+      return this.commitSettings(parsed, identityChanged ? options : { ...options, expectedIdentityRevision: undefined, preserveIdentity: true });
     });
+  }
+  private async commitSettings(parsed: ZetaSettings, options: SettingsWriteOptions): Promise<ZetaSettings> {
+    options.signal?.throwIfAborted(); options.beforeCommit?.();
+    const record = this.domain.table('identity').get('main')!;
+    const profile = options.preserveIdentity ? structuredClone(record.current) : profileOf(parsed);
+    if (options.expectedIdentityRevision !== undefined && options.expectedIdentityRevision !== record.revision) throw new Error('人设已变化，请刷新当前身份后再保存');
+    options.signal?.throwIfAborted(); options.beforeCommit?.();
+    await this.domain.table('settings').put('main', { ...parsed, ...record.current });
+    if (!sameProfile(record.current, profile)) await this.commitIdentity(profile, options.expectedIdentityRevision ?? record.revision, options.reason ?? '管理设置调整名字、人设或习惯', options);
+    const settings = this.settings;
+    options.onCommitted?.({ settings, identity: this.identity });
+    return settings;
   }
   get speech(): SpeechSettings { return this.settings.speech; }
   bindings(): ConversationBinding[] { return [...this.domain.table('bindings').entries()].map(([, value]) => structuredClone(value)); }

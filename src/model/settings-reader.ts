@@ -22,9 +22,6 @@ interface LlmPiAiSettings {
 }
 
 export class SettingsReader {
-  /** settings.yaml 缓存 */
-  private settingsCache: Record<string, unknown> | null | undefined;
-
   /**
    * 从 settings.yaml 的 agent-default-model 字段读取默认模型路由
    */
@@ -77,19 +74,12 @@ export class SettingsReader {
   }
 
   private loadSettings(): Record<string, unknown> | null {
-    if (this.settingsCache !== undefined) return this.settingsCache;
-
     try {
       const settingsPath = resolve(process.env.DSH_HOME || resolve(homedir(), '.dsh'), 'settings.yaml');
-      if (!existsSync(settingsPath)) {
-        this.settingsCache = null;
-        return null;
-      }
+      if (!existsSync(settingsPath)) return null;
       const content = readFileSync(settingsPath, 'utf8');
-      this.settingsCache = yaml.load(content) as Record<string, unknown> | null;
-      return this.settingsCache;
+      return yaml.load(content) as Record<string, unknown> | null;
     } catch {
-      this.settingsCache = null;
       return null;
     }
   }

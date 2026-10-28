@@ -4,7 +4,7 @@
 
 dsh-feiyu-zeta 将 QQ 接入、人设与形象图、长期记忆、共享表情、语音、自主活动、云浏览器、临时网页和生图集成在一个 DSH 插件中。对话模型、会话、工具执行、凭据及自动任务沿用 DeepSeek Harness。
 
-当前版本 **0.4.7**，仅适配 **DSH 0.2.1-rc.3**，Node.js 要求 **>=24.9.0**。插件原名 `dsh-zeta`；代码与数据独立于旧 ProjectZeta 主工程，不会读取旧主工程数据库。0.3.0 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 数据及加密备份有升级兼容处理；实际安装、迁移验证范围见 [VALIDATION.md](./VALIDATION.md)。
+当前版本 **0.4.8**，仅适配 **DSH 0.2.1-rc.3**，Node.js 要求 **>=24.9.0**。插件原名 `dsh-zeta`；代码与数据独立于旧 ProjectZeta 主工程，不会读取旧主工程数据库。0.3.0 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 数据及加密备份有升级兼容处理；实际安装、迁移验证范围见 [VALIDATION.md](./VALIDATION.md)。
 
 ## 安装与升级
 
@@ -67,18 +67,18 @@ npm run check:distribution
 npm pack
 ```
 
-打包得到 `dsh-feiyu-zeta-0.4.7.tgz`。安装助手仍支持本地包：
+打包得到 `dsh-feiyu-zeta-0.4.8.tgz`。安装助手仍支持本地包：
 
 ```powershell
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.7.tgz -WhatIf
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.7.tgz
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.7.tgz -Profile desktop
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.8.tgz -WhatIf
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.8.tgz
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.8.tgz -Profile desktop
 ```
 
 其他平台已有 DSH CLI 时，可使用本仓库的本地归档安装脚本，默认安装到 `web` profile：
 
 ```sh
-./install.sh --package ./dsh-feiyu-zeta-0.4.7.tgz
+./install.sh --package ./dsh-feiyu-zeta-0.4.8.tgz
 ```
 
 可用参数见 `./install.sh --help`；脚本使用已有 DSH，不代为从 npm 安装宿主。开发时保留 `npm run build`；源码变更应连同重新生成的 `dist/`、`lib/` 一起提交。CI 会从干净目录重建并检查已提交产物与源码一致，也会核对 Git 和 npm 归档中的完整运行文件。
@@ -94,6 +94,10 @@ npm pack
 5. 按需配置 **语音**、**外部服务**，再开启 **自主生活**。所有收费能力均需先自行启用。
 
 管理页包含 **概览 / 人设 / 会话 / 记忆 / 表情 / 语音 / 自主生活 / 管理员与群聊 / 外部服务 / 备份迁移**。设置需点击保存；凭据、素材上传和删除各有操作反馈。记忆、语音、生成图片、网页记录、人设与表情统一共用，不再需要选择管理空间。刷新不会自动提交未保存的设置。
+
+群聊与私聊共用功能配置。管理页刷新会更新未编辑的字段并保留本地草稿，保存时只提交实际修改项，避免旧页面把其他聊天刚调整的语音、服务等设置覆盖回去；人设变更仍单独检查版本冲突。
+
+同一机器人 AppID 的群聊与私聊也共用对话模型和新会话的 Agent 预设默认值。管理员从任一聊天切换 `/model` 或 `/preset` 会更新公共默认；模型在各聊天下次请求前对齐，旧的每聊天模型、预设偏好不再覆盖公共选择。各聊天仍保留自己的历史和发送目标。已开始会话的预设遵循 DSH 锁定规则，更新默认只影响新会话；需要采用新预设时在对应聊天使用 `/new`。
 
 管理页面及 API 使用 DSH 登录与 owner 鉴权。未绑定 QQ 时也能通过已登录的管理页管理公共记忆、人设及素材。
 
@@ -244,13 +248,13 @@ npm run check:distribution
 测试覆盖协议模拟、工具权限、身份演变与版本冲突、群沉默与合并、计划恢复、图库迁移及备份等。模拟测试不会证明真实收费服务可用；真实端到端验证应使用自己的账户、短任务，并核对外部回执。真实宿主验证脚本使用桌面版自带 DSH、独立临时 home 和本地假模型，检查原生工具调用、普通 QQ 与自主活动的身份修改、权限边界及重启持久化；不会读取日常 profile：
 
 ```powershell
-node scripts/verify-host.mjs --package .\dsh-feiyu-zeta-0.4.7.tgz
+node scripts/verify-host.mjs --package .\dsh-feiyu-zeta-0.4.8.tgz
 ```
 
 双机迁移脚本另建两个独立临时 DSH home，检查身份、审计记录与原生会话等内容的加密备份及恢复：
 
 ```powershell
-node scripts/verify-backup-host.mjs --package .\dsh-feiyu-zeta-0.4.7.tgz
+node scripts/verify-backup-host.mjs --package .\dsh-feiyu-zeta-0.4.8.tgz
 ```
 
 ## 来源与使用范围

@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rolldown } from 'rolldown';
 import { chromium } from 'playwright-core';
+import { mergeSettingsPatch } from '../src/shared/settings-patch.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -116,10 +117,13 @@ const server = createServer(async (req, res) => {
     if (['/persona/image', '/images/media', '/media'].includes(route)) { res.setHeader('content-type', 'image/png'); res.end(png); return; }
     if (route === '/state') value = fixture;
     else if (route === '/settings') {
-      if (Number(req.headers['x-zeta-identity-revision']) !== fixture.identity.revision) { res.writeHead(409, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: '身份已有新调整，请刷新当前身份后重试。' })); return; }
-      saves.push(structuredClone(data));
-      if (JSON.stringify(identityFields(data)) !== JSON.stringify(identityFields(fixture.settings))) changeIdentity(identityFields(data), '所有者编辑身份与习惯');
-      fixture.settings = structuredClone(data); value = { settings: fixture.settings };
+      if (req.method !== 'PATCH') { res.writeHead(405, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: '新版管理页必须局部更新设置。' })); return; }
+      const changesIdentity = ['name', 'persona', 'habits'].some(key => Object.hasOwn(data, key));
+      if (changesIdentity && Number(req.headers['x-zeta-identity-revision']) !== fixture.identity.revision) { res.writeHead(409, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: '身份已有新调整，请刷新当前身份后重试。' })); return; }
+      const merged = mergeSettingsPatch(fixture.settings, data);
+      if (JSON.stringify(identityFields(merged)) !== JSON.stringify(identityFields(fixture.settings))) changeIdentity(identityFields(merged), '所有者编辑身份与习惯');
+      fixture.settings = structuredClone(merged); saves.push(structuredClone(fixture.settings));
+      value = { settings: fixture.settings, identity: structuredClone(fixture.identity) };
     }
     else if (route === '/identity') value = identitySnapshot();
     else if (route === '/identity/reset') {
@@ -174,7 +178,8 @@ try {
   await page.route('**/*', route => route.request().url().startsWith(origin) || route.request().url().startsWith('blob:') ? route.continue() : route.abort());
   const tab = async name => { await page.getByRole('tab', { name, exact: true }).click(); await page.getByRole('tabpanel').waitFor(); assert.equal(await page.getByLabel('当前管理空间').count(), 0, `${name} has no management-space selector`); };
   const capture = async name => { await page.screenshot({ path: path.join(output, name), fullPage: true }); };
-  const save = async () => { const count = saves.length; await Promise.all([page.waitForResponse(response => response.url().endsWith(`${apiPath}/settings`) && response.request().method() === 'PUT' && response.status() === 200), page.getByRole('button', { name: '保存设置', exact: true }).click()]); await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === '保存设置' && button.disabled)); check(saves.length === count + 1, 'settings save sends exactly one request'); };
+  const save = async () => { const count = saves.length; await Promise.all([page.waitForResponse(response => response.url().endsWith(`${apiPath}/settings`) && response.request().method() === 'PATCH' && response.status() === 200), page.getByRole('button', { name: '保存设置', exact: true }).click()]); await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === '保存设置' && button.disabled)); check(saves.length === count + 1, 'settings save sends exactly one request'); };
+  const refreshSettings = async () => { await Promise.all([page.waitForResponse(response => response.url().endsWith(`${apiPath}/state`) && response.request().method() === 'GET'), page.locator('.zs-head').getByRole('button', { name: '刷新', exact: true }).click()]); await page.getByText('公共状态已刷新，未修改的设置已同步，本地修改已保留。', { exact: true }).waitFor(); };
   await page.goto(`${origin}${mount}/`); await page.getByRole('tab', { name: '管理员与群聊', exact: true }).waitFor();
   if (fnos) {
     await page.getByText('已绑定', { exact: true }).waitFor();
@@ -204,6 +209,21 @@ try {
   check(await page.getByRole('button', { name: '试听', exact: true }).count() === 2, 'shared speech gallery keeps records from multiple conversations visible together');
   await page.getByRole('button', { name: '试听', exact: true }).first().click(); await page.getByLabel('MiMo语音试听').waitFor();
   check(records.some(item => item.path === '/media' && new URLSearchParams(item.query).get('kind') === 'speech'), 'public speech preview loads its shared audio file'); await capture('desktop-speech.png');
+  fixture.settings.speech.enabled = true; fixture.settings.speech.mimo.voice = '茉莉';
+  await refreshSettings();
+  const mimoSettings = page.locator('.zs-card').filter({ has: page.getByRole('heading', { name: 'MiMo 声音设置', exact: true }) });
+  check(await page.getByLabel('启用语音生成', { exact: true }).isChecked() && await mimoSettings.getByLabel(/^声线/).inputValue() === '茉莉', 'refresh without local edits follows the latest shared speech switch and voice');
+  check(await page.getByRole('button', { name: '保存设置', exact: true }).isDisabled(), 'remote-only settings refresh does not invent an unsaved draft');
+  await tab('管理员与群聊'); await page.getByLabel('收到最后一条后等待（毫秒）').fill('2300');
+  fixture.settings.speech.enabled = false; fixture.settings.speech.mimo.voice = '冰糖';
+  await refreshSettings();
+  check(await page.getByLabel('收到最后一条后等待（毫秒）').inputValue() === '2300' && fixture.settings.group.waitMs === 2000, 'three-way refresh preserves the local group wait draft without saving it');
+  await tab('语音');
+  check(!await page.getByLabel('启用语音生成', { exact: true }).isChecked() && await mimoSettings.getByLabel(/^声线/).inputValue() === '冰糖', 'three-way refresh absorbs remote speech changes while preserving another section draft');
+  await save(); const mergedSave = records.filter(item => item.path === '/settings').at(-1);
+  check(mergedSave.method === 'PATCH' && JSON.stringify(mergedSave.body) === JSON.stringify({ group: { waitMs: 2300 } }), 'saving a local group draft sends only the changed leaf field');
+  check(!mergedSave.identityRevision && fixture.settings.speech.enabled === false && fixture.settings.speech.mimo.voice === '冰糖', 'non-identity PATCH omits identity revision and preserves remotely changed speech configuration');
+  await capture('desktop-settings-merge.png');
   await tab('管理员与群聊');
   check(await page.getByLabel('管理员发送者标识').count() === 0 && !(await page.locator('body').innerText()).includes('/admin'), 'administrator management removes manual IDs and command-prefix instructions');
   check(await page.getByRole('list', { name: '当前管理员', exact: true }).getByRole('listitem').filter({ hasText: '已保留原来的管理员设置' }).count() === 1, 'existing administrator without a directory entry remains visible and selected');
@@ -270,7 +290,7 @@ try {
   await tab('人设'); await page.getByLabel('名字', { exact: true }).fill('用户尚未保存的名字');
   const oldRevision = fixture.identity.revision;
   changeIdentity({ name: '小蓝鲸', persona: '想继续了解世界，也会给自己留一点安静的时间。', habits: ['忙完探索后整理收获'] }, '想让现在的名字更贴近自己的感受', 'private-session-token');
-  await page.getByRole('button', { name: '刷新', exact: true }).click(); await page.getByText('状态已刷新，未保存的修改会保留。', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '刷新', exact: true }).click(); await page.getByText('公共状态已刷新，未修改的设置已同步，本地修改已保留。', { exact: true }).waitFor();
   check(await page.getByLabel('名字', { exact: true }).inputValue() === '用户尚未保存的名字', 'ordinary refresh preserves a manually edited identity draft');
   await page.getByText('AI 已更新自己的身份。请刷新当前身份后再保存，其他功能的草稿会保留。', { exact: true }).waitFor();
   const conflictingSave = page.waitForResponse(response => response.url().endsWith(`${apiPath}/settings`) && response.status() === 409);
@@ -329,6 +349,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   for (const name of ['概览', '记忆', '语音', '会话', '管理员与群聊', '外部服务', '人设', '自主生活', '表情', '备份迁移']) { await tab(name); await page.waitForTimeout(80); const layout = await page.evaluate(() => ({ width: innerWidth, body: document.documentElement.scrollWidth })); overflows.push({ tab: name, ...layout }); check(layout.body <= layout.width, `390px ${name} has no horizontal page overflow`); await capture(`mobile-${name}.png`); }
   check(records.every(item => !new URLSearchParams(item.query).has('space') && !Object.hasOwn(item.body ?? {}, 'space')), 'every management API request omits obsolete space query and body parameters');
+  check(records.filter(item => item.path === '/settings').every(item => item.method === 'PATCH' && (['name', 'persona', 'habits'].some(key => Object.hasOwn(item.body, key)) ? typeof item.identityRevision === 'string' : item.identityRevision === undefined)), 'all settings writes are partial PATCH requests and carry identity revision only for identity changes');
   if (fnos) {
     check(records.every(item => item.wirePath.startsWith(`${mount}${apiPath}/`)) && qqRequests.every(item => item.wirePath.startsWith(`${mount}${qqbot}/`)), 'all actual panel requests use plugins namespace and receive the FNOS mount prefix');
     check(JSON.stringify(unmapped.map(item => item.path).sort()) === JSON.stringify(['/qqbot/im-qqbot/config', '/zeta/api/state'].sort()), 'only deliberate legacy probes hit the NAS root; no current panel request leaks there');

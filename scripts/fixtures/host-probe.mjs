@@ -24,6 +24,8 @@ export async function apply(ctx, config) {
   let apiPath = '/zeta/api';
   let nativeExploration = false;
   let qqExploration = false;
+  let sharedConfiguration = false;
+  let sharedIdentityProbe;
   let nativePersonaPath;
   const nativeWebProvider = 'zeta-native-life-fixture';
   const nativeWebCalls = { search: 0, fetch: 0 };
@@ -58,6 +60,18 @@ export async function apply(ctx, config) {
       assert.ok(options.model === 'fixture' || options.model === 'fixture-2');
       const raw = JSON.stringify(options.messages);
       if (raw.includes('zeta-host-memory-marker')) injectedMemory = true;
+      const sharedMarker = sharedIdentityProbe?.markers.find(marker => marker.sessionId === options.sessionId && options.messages.some(message => message.role === 'user' && JSON.stringify(message).includes(marker.text)));
+      if (sharedMarker) {
+        // The unique identity is never in the marker's user input or any earlier
+        // turn. Only the actual freshly assembled model request can supply it.
+        sharedIdentityProbe.observed.push({ sessionId: options.sessionId, marker: sharedMarker.text, name: raw.includes(sharedIdentityProbe.name), persona: raw.includes(sharedIdentityProbe.persona) });
+        const text = 'Local shared-configuration fixture turn completed.';
+        yield { type: 'block-start', index: 0, blockType: 'text' };
+        yield { type: 'text-delta', index: 0, text };
+        yield { type: 'block-end', index: 0, block: { type: 'text', text } };
+        yield { type: 'finish', reason: { kind: 'stop' } };
+        return;
+      }
       const isLoopProbe = options.messages.some(message => message.role === 'user' && JSON.stringify(message).includes('ZETA_LOOP_PROBE'));
       const alreadyEchoed = options.messages.some(message => message.role === 'tool' && JSON.stringify(message).includes('zeta-host-echo-marker'));
       const isLife = options.sessionId === runtime.state.life.sessionId;
@@ -255,6 +269,60 @@ export async function apply(ctx, config) {
       await ctx.sessions.flush(agent.session);
     } finally { runtime.endRequest?.(agent); }
   }
+  async function verifySharedConfiguration(privateAgent, groupAgent) {
+    const original = runtime.state.settings;
+    const originalIdentity = runtime.state.identity;
+    const agents = [privateAgent, groupAgent];
+    const sessionIds = agents.map(agent => agent.id);
+    const bindings = agents.map(agent => runtime.bindingFor(agent));
+    const historyBefore = await Promise.all(sessionIds.map(id => ctx.sessionController.inspect(id)));
+    const voice = original.speech.mimo.voice === 'mimo_default' ? '茉莉' : 'mimo_default';
+    const dailyLimit = original.images.dailyLimit === 1000 ? 999 : original.images.dailyLimit + 1;
+    const name = `小鲸鱼·共享配置验证-${randomUUID().slice(0, 8)}`;
+    const persona = `Native shared persona propagation marker ${randomUUID()}. Keep the same conversations and histories.`;
+    const reason = 'Native cross-scope shared identity propagation fixture';
+    let identityChanged = false;
+    let privateHandle, groupHandle;
+    try {
+      privateHandle = runtime.beginRequest(privateAgent, [{ senderId: administrator, messageId: `fixture_${randomUUID()}`, text: '请修改公共语音的默认声线，其他设置保持。' }], false);
+      groupHandle = runtime.beginRequest(groupAgent, [{ senderId: administrator, messageId: `fixture_${randomUUID()}`, text: '请修改公共图片每日次数，其他设置保持。' }], true);
+      await execute(groupAgent, 'zeta_group_decide', { decision: 'reply' });
+      await Promise.all([
+        execute(privateAgent, 'zeta_settings_update', { changes: { speech: { mimo: { voice } } } }),
+        execute(groupAgent, 'zeta_settings_update', { changes: { images: { dailyLimit } } }),
+      ]);
+      assertCheck(runtime.state.settings.speech.mimo.voice === voice && runtime.state.settings.images.dailyLimit === dailyLimit, 'Concurrent real private and group administrator tools retain both disjoint shared settings changes');
+      const [privateRead, groupRead] = await Promise.all(agents.map(agent => execute(agent, 'zeta_settings_get', {})));
+      assert.deepEqual(privateRead.settings, groupRead.settings);
+      assert.deepEqual(groupRead.settings, runtime.state.settings);
+      assertCheck(privateRead.settings.speech.mimo.voice === voice && groupRead.settings.images.dailyLimit === dailyLimit, 'Existing private and group Agents read the same authoritative shared settings through native tools');
+      await request('/settings', 'PATCH', { speech: { mimo: { voice: original.speech.mimo.voice } }, images: { dailyLimit: original.images.dailyLimit } });
+      assertCheck(runtime.state.settings.speech.enabled === original.speech.enabled && runtime.state.settings.speech.mimo.voice === original.speech.mimo.voice && runtime.state.settings.images.dailyLimit === original.images.dailyLimit, 'Owner partial restore changes only the fixture fields and retains the original speech enablement');
+      await execute(privateAgent, 'zeta_identity_update', { expected_revision: runtime.state.identity.revision, reason, name, persona });
+      identityChanged = true;
+      runtime.endRequest(privateAgent, privateHandle); privateHandle = undefined;
+      runtime.endRequest(groupAgent, groupHandle); groupHandle = undefined;
+      const markers = sessionIds.map((sessionId, index) => ({ sessionId, text: `ZETA_SHARED_CONFIG_READ_${index}_${randomUUID()}` }));
+      assert.ok(markers.every(marker => !marker.text.includes(name) && !marker.text.includes(persona)));
+      sharedIdentityProbe = { name, persona, markers, observed: [] };
+      const callsBefore = modelCalls;
+      await Promise.all(agents.map((agent, index) => runChat(agent, markers[index].text, false)));
+      assertCheck(modelCalls === callsBefore + 2 && sharedIdentityProbe.observed.length === 2 && markers.every(marker => sharedIdentityProbe.observed.some(value => value.sessionId === marker.sessionId && value.marker === marker.text && value.name && value.persona)), 'The next actual private and group model requests both receive the fresh shared name and persona absent from their user input');
+      assert.deepEqual(agents.map(agent => agent.id), sessionIds);
+      assert.deepEqual(agents.map(agent => runtime.bindingFor(agent)), bindings);
+      const historyAfter = await Promise.all(sessionIds.map(id => ctx.sessionController.inspect(id)));
+      for (let index = 0; index < agents.length; index++) assert.deepEqual(historyAfter[index].events.slice(0, historyBefore[index].events.length), historyBefore[index].events);
+      assertCheck(historyAfter.every((value, index) => value.events.length > historyBefore[index].events.length), 'Shared configuration and identity changes preserve both native Session IDs, routes and every previous history event');
+    } finally {
+      sharedIdentityProbe = undefined;
+      if (privateHandle) runtime.endRequest(privateAgent, privateHandle);
+      if (groupHandle) runtime.endRequest(groupAgent, groupHandle);
+      await request('/settings', 'PATCH', { speech: { mimo: { voice: original.speech.mimo.voice } }, images: { dailyLimit: original.images.dailyLimit }, ...(identityChanged ? { name: originalIdentity.name, persona: originalIdentity.persona, habits: originalIdentity.habits } : {}) }, identityChanged ? { 'x-zeta-identity-revision': String(runtime.state.identity.revision) } : {});
+    }
+    assert.deepEqual(runtime.state.settings.speech, original.speech);
+    assert.deepEqual(runtime.state.settings.images, original.images);
+    assertCheck(runtime.state.identity.name === originalIdentity.name && runtime.state.identity.persona === originalIdentity.persona && JSON.stringify(runtime.state.identity.habits) === JSON.stringify(originalIdentity.habits) && runtime.state.identity.history.some(change => change.reason === reason && change.sourceSessionId === privateAgent.id) && runtime.state.identity.history.at(-1).before.name === name, 'Shared fixture restores original semantic identity and service settings while retaining the real attributed audit history');
+  }
   function assertGroupPreview(preview, description) {
     assertCheck(preview.target === fixtureTarget && preview.messages.some(message => message.role === 'user' && message.text.includes('ZETA_GROUP_USER_MARKER')) && preview.messages.some(message => message.role === 'assistant' && message.text.includes('Local fixture completed')), description);
     const rendered = JSON.stringify(preview.messages);
@@ -266,6 +334,7 @@ export async function apply(ctx, config) {
       const version = pluginManifest.version.split(/[.-]/u).slice(0, 3).map(Number);
       nativeExploration = version[0] > 0 || version[1] > 4 || (version[1] === 4 && version[2] >= 6);
       qqExploration = version[0] > 0 || version[1] > 4 || (version[1] === 4 && version[2] >= 7);
+      sharedConfiguration = version[0] > 0 || version[1] > 4 || (version[1] === 4 && version[2] >= 8);
       if (nativeExploration) installNativeWebFixtures();
       if (pluginManifest.name === 'dsh-feiyu-zeta') {
         assertCheck(pluginManifest.repository?.url === 'git+https://github.com/xiaoyaocz/dsh-feiyu-zeta.git', 'Installed plugin declares its own repository');
@@ -507,6 +576,7 @@ export async function apply(ctx, config) {
         await rejectsTool(lifeAgent, 'zeta_conversation_read', { target: fixtureTarget }, 'Removing a life read target immediately prevents inspection');
         await request('/settings', 'PUT', { ...runtime.state.settings, life: { ...runtime.state.settings.life, readTargets: [fixtureTarget] } });
         if (qqExploration) await verifyRequestDelivery(aliceNew);
+        if (sharedConfiguration) await verifySharedConfiguration(aliceNew, group.agent);
         // Direct fixture bindings bypass discovery; seed the same trustworthy
         // private-peer observations before restart can backfill legacy peers.
         for (const conversation of runtime.state.conversations('zeta-fixture').filter(record => record.scope === 'c2c')) {

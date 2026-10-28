@@ -20,10 +20,11 @@ const MATERIAL_KINDS = ['memes', 'speech', 'persona', 'images', 'deployments', '
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const jsonCopy = (value) => JSON.parse(JSON.stringify(value));
 const portablePath = z.string().max(8192).refine(value => /^(?:[a-z]:[\\/]|[\\/])/i.test(value) && !/[\u0000-\u001f]/.test(value));
+const configurationPreferenceKey = z.string().regex(/^qqbot:[^:\s]+:(?:(?:c2c|group):[^:\s]+|shared)$/);
 const preferencesSchema = z.object({
-    overrides: z.record(z.string().regex(/^qqbot:[^:\s]+:(?:c2c|group):[^:\s]+$/), z.object({ provider: z.string().min(1).max(160), model: z.string().min(1).max(240) }).strict()).default({}),
+    overrides: z.record(configurationPreferenceKey, z.object({ provider: z.string().min(1).max(160), model: z.string().min(1).max(240) }).strict()).default({}),
     sessionIds: z.record(z.string().regex(/^qqbot:[^:\s]+:(?:c2c|group):[^:\s]+$/), z.string().min(1).max(512)).default({}),
-    presets: z.record(z.string().regex(/^qqbot:[^:\s]+:(?:c2c|group):[^:\s]+$/), z.string().min(1).max(160)).default({}),
+    presets: z.record(configurationPreferenceKey, z.string().min(1).max(160)).default({}),
 }).strict();
 function readPreferences(value) { return preferencesSchema.parse(value); }
 const manifestSchema = z.object({
@@ -354,7 +355,7 @@ export class BackupService {
             catch {
                 conflicts.push('目标的模型配置、QQ入口或连接凭据存在冲突，请先在DSH设置中处理后重新校验');
             }
-            if (![PLUGIN_VERSION, '0.4.3', '0.4.2', '0.4.1', '0.4.0', '0.3.0'].includes(manifest.pluginVersion))
+            if (![PLUGIN_VERSION, '0.4.7', '0.4.6', '0.4.5', '0.4.4', '0.4.3', '0.4.2', '0.4.1', '0.4.0', '0.3.0'].includes(manifest.pluginVersion))
                 conflicts.push(`迁移包使用插件${manifest.pluginVersion}，请先安装同版本插件后恢复`);
             for (const preset of manifest.presets) {
                 try {

@@ -6,7 +6,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { ZetaRuntime } from './runtime.ts';
 import type { MemeModule } from './memes.ts';
 import { generateSpeech, listSpeechFiles } from './speech.ts';
-import type { ZetaState } from './state.ts';
+import type { IdentityView, ZetaState } from './state.ts';
 import { compatibleRoutePaths, ownerRoutes } from '../shared/host-routes.ts';
 import { ZETA_API_PATH, LEGACY_ZETA_API_PATH } from '../shared/http-paths.ts';
 import type { BackupService } from './backup.ts';
@@ -151,12 +151,16 @@ function registerZetaApiRoutes(ctx: Context, runtime: ZetaRuntime, state: ZetaSt
       }
       if (path === '/conversations' && method === 'GET') { json(res, 200, { items: runtime.conversations() }); return; }
       if (path === '/conversations' && method === 'PATCH') { const item = await state.renameConversation(runtime.appId, text(data.target, 240), text(data.title, 80)); json(res, 200, { item }); return; }
-      if (path === '/settings' && method === 'PUT') {
+      if (path === '/settings' && (method === 'PUT' || method === 'PATCH')) {
         const revision = req.headers['x-zeta-identity-revision'];
         if (revision !== undefined && (typeof revision !== 'string' || !/^\d{1,16}$/u.test(revision) || !Number.isSafeInteger(Number(revision)))) throw new Error('人设版本标识无效，请刷新页面');
-        const settings = await state.setSettings(data, revision === undefined ? { preserveIdentity: true } : { expectedIdentityRevision: Number(revision) });
+        if (method === 'PATCH' && ['name', 'persona', 'habits'].some(key => Object.hasOwn(data, key)) && revision === undefined) throw new Error('修改身份前请先读取当前人设版本');
+        let identity: IdentityView | undefined;
+        const options = { ...(revision === undefined ? { preserveIdentity: true } : { expectedIdentityRevision: Number(revision) }), signal: abort.signal, onCommitted: (value: { identity: IdentityView }) => { identity = value.identity; } };
+        const settings = method === 'PATCH' ? await state.patchSettings(data, options) : await state.setSettings(data, options);
+        const result = { settings, ...(method === 'PATCH' ? { identity } : {}) };
         if (!settings.browser.enabled) await services?.browser.quiesce();
-        try { await life.reconcile(); json(res, 200, { settings }); } catch (error) { json(res, 200, { settings, warning: safeError(error) }); }
+        try { await life.reconcile(); json(res, 200, result); } catch (error) { json(res, 200, { ...result, warning: safeError(error) }); }
         return;
       }
       if (path === '/credential' && method === 'PUT') {

@@ -66,6 +66,24 @@ interface AssembledPrompt {
   [key: string]: unknown;
 }
 
+interface PersistedPreset { preset?: string }
+interface PresetObservation {
+  header: { agentPreset?: string };
+  projections?: { values: Record<string, unknown> };
+  [Symbol.dispose](): void;
+}
+
+function modelRoute(value: unknown): ModelRoute | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const route = value as { provider?: unknown; model?: unknown };
+  return typeof route.provider === 'string' && route.provider && typeof route.model === 'string' && route.model
+    ? { provider: route.provider, model: route.model } : undefined;
+}
+
+function sameRoute(left: ModelRoute | undefined, right: ModelRoute): boolean {
+  return left?.provider === right.provider && left.model === right.model;
+}
+
 export class SessionManager {
   private sessions = new Map<string, SessionRecord>();
   private readonly evictor: IdleEvictor;
@@ -74,6 +92,7 @@ export class SessionManager {
   private readonly agents: DshAgentRegistry;
   private readonly config: ImQQBotConfig;
   private readonly logger: Logger;
+  private readonly modelUpdates = new WeakMap<DshAgent, Promise<void>>();
   /** 由 bootstrap 注入的问答通道（ask_user_question → QQ），会话回收时清理其待答问题 */
   public questionChannel?: QuestionChannel;
   /** 由 bootstrap 注入的审批通道（approval/request → QQ），会话回收时清理其待批审批 */
@@ -156,10 +175,23 @@ export class SessionManager {
   }
 
   /**
-   * 从 session 持久化 header 读 session 当初的 preset（started 锁定语义）。
-   * 读不到（服务缺失 / session 不存在 / 未记录 agentPreset）返回 undefined。
+   * Read the native projection, including blank-session selection events.
+   * An existing Session without a preset must not acquire the new default.
    */
-  private async resolvePersistedPreset(sessionId: string): Promise<string | undefined> {
+  private async resolvePersistedPreset(sessionId: string): Promise<PersistedPreset | undefined> {
+    const query = this.getService('sessionQuery') as { observeSession(id: string, options: { projectionMode: 'all' }): Promise<PresetObservation> } | undefined;
+    if (query) {
+      try {
+        const observation = await query.observeSession(sessionId, { projectionMode: 'all' });
+        try {
+          const projected = observation.projections?.values.agentPreset;
+          return { preset: typeof projected === 'string' ? projected : projected === null ? undefined : observation.header.agentPreset };
+        } finally { observation[Symbol.dispose](); }
+      } catch (err) {
+        // A fresh deterministic QQ id normally has no stored Session yet.
+        if ((err as { code?: unknown } | null)?.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') throw err;
+      }
+    }
     let persistence: { stat(id: string): Promise<{ header?: { agentPreset?: string } } | undefined> } | undefined;
     try {
       persistence = this.ctx.get('sessionPersistence') as typeof persistence | undefined;
@@ -168,7 +200,8 @@ export class SessionManager {
     }
     if (!persistence) return undefined;
     try {
-      return (await persistence.stat(sessionId))?.header?.agentPreset;
+      const stored = await persistence.stat(sessionId);
+      return stored ? { preset: stored.header?.agentPreset } : undefined;
     } catch {
       return undefined;
     }
@@ -181,7 +214,7 @@ export class SessionManager {
   }
 
   /**
-   * 获取指定 peer 的生效 preset（per-peer 覆盖 > config.preset）
+   * 获取所有 QQ 新会话共享的 preset 默认。
    */
   getEffectivePreset(scope: ChatScope, peerId: string): string | undefined {
     return this.getEffectivePresetByKey(this.sessionKey(scope, peerId));
@@ -189,7 +222,7 @@ export class SessionManager {
 
   /** 按 sessionKey 解析生效 preset */
   private getEffectivePresetByKey(key: string): string | undefined {
-    return this.modelResolver.getPreset(key) ?? this.config.preset;
+    return this.modelResolver.getPreset(key)?.trim() || this.config.preset?.trim() || this.getPresetsService()?.defaultId;
   }
 
   /**
@@ -208,25 +241,28 @@ export class SessionManager {
   }
 
   /**
-   * 通过 DSH 原生选择模型，保留当前会话及完整历史。
+   * 从任一聊天保存公共模型；运行中的 Agent 留到下次请求再对齐。
    */
   async setModelOverride(scope: ChatScope, peerId: string, route: ModelRoute): Promise<void> {
     const key = this.sessionKey(scope, peerId);
-
-    const record = this.sessions.get(key);
-    if (!record) {
-      this.modelResolver.setOverride(key, route);
-      this.logger.info(`model pref saved (no active session): key=${key} → ${route.provider}/${route.model}`);
-      return;
+    const normalized = { provider: route.provider.trim(), model: route.model.trim() };
+    if (!normalized.provider || !normalized.model || normalized.provider.length > 160 || normalized.model.length > 240) throw new Error('模型配置无效');
+    const llm = this.getService('llm') as { listProviders?(): Array<string | { id: string }>; listModels?(provider: string): Promise<readonly { id: string }[]> } | undefined;
+    let available: boolean;
+    if (typeof llm?.listProviders === 'function' && typeof llm.listModels === 'function') {
+      // Match native selectModel admission, not the legacy discovery fallback.
+      available = llm.listProviders().some(provider => (typeof provider === 'string' ? provider : provider.id) === normalized.provider)
+        && (await llm.listModels(normalized.provider)).some(model => model.id === normalized.model);
+    } else {
+      available = (await this.modelResolver.listModels()).some(model => model.provider === normalized.provider && model.id === normalized.model);
     }
-
-    await this.ctx.sessionController.selectModel({ sessionId: SessionId(record.sessionId), ...route });
-    this.modelResolver.setOverride(key, route);
-    this.logger.info(`model selected: key=${key} → ${route.provider}/${route.model}`);
+    if (!available) throw new Error('当前部署未提供该模型，请先在宿主配置或注册后查看 /model 列表。');
+    this.modelResolver.setOverride(key, normalized);
+    this.logger.info(`shared QQ model saved: appId=${this.config.appId} → ${normalized.provider}/${normalized.model}`);
   }
 
   /**
-   * 切换指定 peer 的 agent preset（per-peer 覆盖）
+   * 修改所有 QQ 新会话的公共 preset 默认。
    *
    * 已开始的会话保持锁定（blank-session contract）：只持久化为新会话默认，
    * 不 fork/rebuild 当前会话，避免历史工具调用与新 preset 工具集冲突。
@@ -247,23 +283,23 @@ export class SessionManager {
       return { ok: false, reason: 'broken', message: resolved.broken };
     }
 
-    // 2. 持久化 per-peer 覆盖（新会话生效）
-    this.modelResolver.setPreset(key, presetId);
+    // 2. 持久化公共默认（已开始的会话保留自己的原生 preset）
+    this.modelResolver.setPreset(key, resolved.id);
 
     const hasActive = this.sessions.has(key);
     this.logger.info(
-      `preset pref saved: key=${key} → ${presetId}${hasActive ? ' (active session locked, next session applies)' : ''}`,
+      `shared QQ preset saved: appId=${this.config.appId} → ${resolved.id}${hasActive ? ' (active session locked, new sessions apply)' : ''}`,
     );
-    return { ok: true, presetId };
+    return { ok: true, presetId: resolved.id };
   }
 
   /**
-   * 清除 per-peer preset 覆盖，回到 config.preset / 默认（新会话生效）
+   * 清除公共 preset 覆盖，回到 config.preset / 默认（新会话生效）
    */
   async clearPresetOverride(scope: ChatScope, peerId: string): Promise<PresetSwitchOutcome> {
     const key = this.sessionKey(scope, peerId);
     this.modelResolver.clearPreset(key);
-    this.logger.info(`preset pref cleared: key=${key} (next session applies)`);
+    this.logger.info(`shared QQ preset cleared: appId=${this.config.appId} (new sessions apply)`);
     return { ok: true };
   }
 
@@ -294,14 +330,18 @@ export class SessionManager {
 
   getStatus(scope: ChatScope, peerId: string): SessionStatus {
     const record = this.getSessionRecord(scope, peerId);
-    const route = this.getEffectiveModel(scope, peerId);
+    const route = record ? this.currentModel(record) : undefined;
+    const shared = this.getEffectiveModel(scope, peerId);
 
     return {
       active: !!record,
       sessionId: record?.sessionId,
       provider: route?.provider,
       model: route?.model,
-      preset: record?.agentPreset,
+      preset: record ? this.presetForAgent(record.agent) ?? record.agentPreset : undefined,
+      defaultProvider: shared?.provider,
+      defaultModel: shared?.model,
+      defaultPreset: this.getEffectivePreset(scope, peerId),
       lastActivity: record?.lastActivity,
       messageCount: this.countMessages(record),
     };
@@ -367,6 +407,47 @@ export class SessionManager {
     return `qqbot:${this.config.appId}:${scope}:${peerId}`;
   }
 
+  private getService(name: string): unknown {
+    try { return this.ctx.get(name as never); } catch { return undefined; }
+  }
+
+  private projection(agent: DshAgent, name: string): unknown {
+    const projections = this.getService('sessionProjections') as { stateOf(session: unknown, key: string): unknown } | undefined;
+    try { return projections?.stateOf(agent.session, name); } catch { return undefined; }
+  }
+
+  private presetForAgent(agent: DshAgent): string | undefined {
+    const mounted = this.getPresetsService()?.composedPreset?.(agent.ctx);
+    if (mounted !== undefined) return mounted;
+    const projected = this.projection(agent, 'agentPreset');
+    return typeof projected === 'string' ? projected : projected === null ? undefined : agent.session.header?.agentPreset;
+  }
+
+  /** Native pending selection, last request and initial options are distinct facts. */
+  private currentModel(record: SessionRecord): ModelRoute | undefined {
+    const header = modelRoute(record.agent.session.requestHeader?.()?.config);
+    if (record.agent.status === 'running' && header) return header;
+    const pending = this.projection(record.agent, 'modelSelection') as { pending?: unknown } | undefined;
+    if (pending !== undefined) return modelRoute(pending.pending) ?? header ?? modelRoute(record.agent.options);
+    return record.selectedModel ?? header ?? modelRoute(record.agent.options);
+  }
+
+  /** Reconcile at admission, without cancelling or rebuilding any conversation. */
+  private async alignModel(record: SessionRecord): Promise<void> {
+    if (record.agent.status === 'running') return;
+    const previous = this.modelUpdates.get(record.agent) ?? Promise.resolve();
+    const update = previous.catch(() => {}).then(async () => {
+      if (record.agent.status === 'running') return;
+      const shared = this.modelResolver.getEffectiveRoute(record.sessionKey);
+      if (sameRoute(this.currentModel(record), shared)) return;
+      const result = await this.ctx.sessionController.selectModel({ sessionId: SessionId(record.sessionId), ...shared });
+      record.selectedModel = modelRoute(result.selected) ?? shared;
+    });
+    this.modelUpdates.set(record.agent, update);
+    try { await update; }
+    finally { if (this.modelUpdates.get(record.agent) === update) this.modelUpdates.delete(record.agent); }
+  }
+
   private deriveSessionId(sessionKey: string): string {
     const hash = createHash('sha256').update(sessionKey).digest('hex');
     return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
@@ -376,9 +457,12 @@ export class SessionManager {
     return this.modelResolver.getSessionId(sessionKey) ?? this.deriveSessionId(sessionKey);
   }
 
-  private async composePreset(presetId?: string): Promise<PresetComposition> {
+  private async composePreset(presetId?: string, required = false): Promise<PresetComposition> {
     const presets = this.getPresetsService();
-    if (!presets) return {};
+    if (!presets) {
+      if (required && presetId !== undefined) throw new Error(`当前部署缺少会话原有 preset：${presetId}`);
+      return {};
+    }
 
     try {
       const resolved = await presets.resolve(presetId);
@@ -390,6 +474,7 @@ export class SessionManager {
         },
       };
     } catch (err) {
+      if (required) throw err;
       this.logger.warn(
         `im-qqbot: preset ${presetId ?? '(default)'} unavailable: ${err instanceof Error ? err.message : String(err)} — using host composition`,
       );
@@ -410,6 +495,7 @@ export class SessionManager {
     if (existing) {
       existing.replyTarget = replyTarget;
       existing.lastActivity = Date.now();
+      await this.alignModel(existing);
       return existing;
     }
 
@@ -424,12 +510,15 @@ export class SessionManager {
     const live = this.agents.get(sessionId);
     if (live) {
       agent = live;
+      agentPreset = this.presetForAgent(live);
       this.logger.info(`reusing live agent: key=${key}`);
     } else {
       // preset 只解析一次：resume/create 共用同一组合，避免重复 resolve/mount 目录。
-      // 优先 session 当初的 preset（started 锁定语义），无则用当前 effective preset。
-      const presetId = (await this.resolvePersistedPreset(sessionId)) ?? this.getEffectivePresetByKey(key);
-      const composed = await this.composePreset(presetId);
+      // Stored Sessions retain their native projected preset. Only genuinely
+      // new Sessions use the current shared default (including no-preset logs).
+      const persisted = await this.resolvePersistedPreset(sessionId);
+      const presetId = persisted ? persisted.preset : this.getEffectivePresetByKey(key);
+      const composed = persisted && presetId === undefined ? {} : await this.composePreset(presetId, !!persisted);
       agentPreset = composed.agentPreset;
       try {
         const resumeRoute = this.modelResolver.getResumeRoute(key);
@@ -441,7 +530,8 @@ export class SessionManager {
         agent = resumed.agent;
         handle = resumed;
         this.logger.info(`resumed session: key=${key} preset=${agentPreset ?? 'none'} route=${resumeRoute ? `${resumeRoute.provider}/${resumeRoute.model}` : 'session-own'}`);
-      } catch {
+      } catch (error) {
+        if (persisted) throw error;
         const created = await this.agents.create({
           sessionId,
           meta: {
@@ -471,6 +561,7 @@ export class SessionManager {
     };
 
     this.sessions.set(key, record);
+    await this.alignModel(record);
     return record;
   }
 

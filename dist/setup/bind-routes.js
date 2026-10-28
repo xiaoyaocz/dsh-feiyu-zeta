@@ -3,6 +3,8 @@ import { getProfileDir } from "../shared/index.js";
 import { AccessControlSchema } from "../config.js";
 import { compatibleRoutePaths } from "../shared/host-routes.js";
 import { QQBOT_API_PATH, LEGACY_QQBOT_API_PATH } from "../shared/http-paths.js";
+import { PrefsStore } from "../model/prefs-store.js";
+import { sharedPreferencesKey } from "../model/model-resolver.js";
 import { BIND_CONFIG_PATH, BIND_MANUAL_PATH, BIND_REFRESH_PATH, BIND_STATE_PATH, BIND_UNBIND_PATH, } from "../shared/bind-protocol.js";
 // 协议单一来源：shared/bind-protocol.ts（类型 + 路径常量，客户端共用）
 export { BIND_CONFIG_PATH, BIND_MANUAL_PATH, BIND_REFRESH_PATH, BIND_STATE_PATH, BIND_UNBIND_PATH };
@@ -26,6 +28,12 @@ const EDITABLE_CONFIG_SCHEMAS = {
     directPrompt: stringSchema('directPrompt'),
     access: (v) => AccessControlSchema(v),
 };
+function sharedPreferences(options, current) {
+    const appId = options.boundAppId?.() ?? current.appId;
+    if (typeof appId !== 'string' || !appId.trim() || appId === '__FROM_ENV__' || /[:\s]/.test(appId))
+        return undefined;
+    return { store: new PrefsStore(), key: sharedPreferencesKey(appId) };
+}
 function booleanSchema(value, name) {
     if (typeof value !== 'boolean')
         throw new TypeError(`${name} 必须是布尔值`);
@@ -277,6 +285,20 @@ async function handleConfig(req, res, options) {
         const current = options.currentConfig?.() ?? {};
         // appSecret 永不回传；其余（含只读 cwd）原样回显
         const { appSecret: _s, ...safe } = current;
+        try {
+            const shared = sharedPreferences(options, current);
+            if (shared) {
+                const model = shared.store.getOverride(shared.key), preset = shared.store.getPreset(shared.key);
+                if (model)
+                    Object.assign(safe, model);
+                if (preset)
+                    safe.preset = preset;
+            }
+        }
+        catch {
+            sendJson(res, 500, { error: 'QQ公共配置无法读取，请检查配置文件后重试' });
+            return;
+        }
         sendJson(res, 200, { config: safe });
         return;
     }
@@ -319,11 +341,44 @@ async function handleConfig(req, res, options) {
         sendJson(res, 400, { ok: false, error: err instanceof TypeError ? err.message : String(err) });
         return;
     }
+    const changesModel = Object.hasOwn(validated, 'provider') || Object.hasOwn(validated, 'model');
+    const changesPreset = Object.hasOwn(validated, 'preset');
+    let shared;
+    try {
+        const current = options.currentConfig?.() ?? {};
+        if (changesModel || changesPreset)
+            shared = sharedPreferences(options, current);
+        if (changesModel && shared) {
+            const selected = shared.store.getOverride(shared.key);
+            // Editing just provider or model must retain the other value currently
+            // shown in the form, including a preceding /model command selection.
+            validated = { ...validated,
+                provider: Object.hasOwn(validated, 'provider') ? validated.provider : selected?.provider ?? current.provider ?? '',
+                model: Object.hasOwn(validated, 'model') ? validated.model : selected?.model ?? current.model ?? '',
+            };
+        }
+    }
+    catch {
+        sendJson(res, 500, { ok: false, error: 'QQ公共配置无法读取，本次配置未保存' });
+        return;
+    }
     const persisted = options.onUpdateConfig === undefined
         ? updateProfileConfig(validated, getProfileDir() ?? undefined, undefined)
         : options.onUpdateConfig(validated);
     if (!persisted) {
         sendJson(res, 500, { ok: false, error: '无法定位 profile 目录或写入失败' });
+        return;
+    }
+    try {
+        // Only a successful explicit profile change takes authority from the
+        // corresponding chat-command preference. All legacy peer rows survive.
+        if (shared && changesModel)
+            shared.store.clearOverride(shared.key);
+        if (shared && changesPreset)
+            shared.store.clearPreset(shared.key);
+    }
+    catch {
+        sendJson(res, 500, { ok: false, error: '配置已写入，但公共偏好更新失败，请重试保存' });
         return;
     }
     sendJson(res, 200, { ok: true, message: '配置已保存，插件将自动重载（进行中的机器人会话将重置）' });

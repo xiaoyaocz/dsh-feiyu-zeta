@@ -235,19 +235,24 @@ function registerZetaApiRoutes(ctx, runtime, state, memes, life, backup, service
                 json(res, 200, { item });
                 return;
             }
-            if (path === '/settings' && method === 'PUT') {
+            if (path === '/settings' && (method === 'PUT' || method === 'PATCH')) {
                 const revision = req.headers['x-zeta-identity-revision'];
                 if (revision !== undefined && (typeof revision !== 'string' || !/^\d{1,16}$/u.test(revision) || !Number.isSafeInteger(Number(revision))))
                     throw new Error('人设版本标识无效，请刷新页面');
-                const settings = await state.setSettings(data, revision === undefined ? { preserveIdentity: true } : { expectedIdentityRevision: Number(revision) });
+                if (method === 'PATCH' && ['name', 'persona', 'habits'].some(key => Object.hasOwn(data, key)) && revision === undefined)
+                    throw new Error('修改身份前请先读取当前人设版本');
+                let identity;
+                const options = { ...(revision === undefined ? { preserveIdentity: true } : { expectedIdentityRevision: Number(revision) }), signal: abort.signal, onCommitted: (value) => { identity = value.identity; } };
+                const settings = method === 'PATCH' ? await state.patchSettings(data, options) : await state.setSettings(data, options);
+                const result = { settings, ...(method === 'PATCH' ? { identity } : {}) };
                 if (!settings.browser.enabled)
                     await services?.browser.quiesce();
                 try {
                     await life.reconcile();
-                    json(res, 200, { settings });
+                    json(res, 200, result);
                 }
                 catch (error) {
-                    json(res, 200, { settings, warning: safeError(error) });
+                    json(res, 200, { ...result, warning: safeError(error) });
                 }
                 return;
             }

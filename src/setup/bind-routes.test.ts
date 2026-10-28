@@ -8,8 +8,12 @@
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Context } from '@deepseek-ai/cordis';
+import type { ImQQBotConfig } from '../config.ts';
+import { ModelResolver, sharedPreferencesKey } from '../model/model-resolver.ts';
+import { PrefsStore } from '../model/prefs-store.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   BIND_CONFIG_PATH,
@@ -111,6 +115,13 @@ function json(res: { body: string }): unknown {
 }
 
 describe('bind-routes', () => {
+  let sharedTestHome: string;
+  beforeEach(() => { sharedTestHome = mkdtempSync(join(tmpdir(), 'zeta-bind-shared-')); vi.stubEnv('DSH_HOME', sharedTestHome); });
+  afterEach(() => {
+    vi.unstubAllEnvs(); const path = relative(resolve(tmpdir()), resolve(sharedTestHome));
+    if (!path || path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) throw new Error('Unsafe fixture cleanup');
+    rmSync(sharedTestHome, { recursive: true, force: true });
+  });
   it('注册状态、刷新与手动提交三条精确路由', () => {
     const { routes } = createHarness();
     expect(routes.has(BIND_STATE_PATH)).toBe(true);
@@ -338,6 +349,55 @@ describe('bind-routes', () => {
     await invoke(routes.get(BIND_CONFIG_PATH), fakeReq('GET', { host: '127.0.0.1:3080' }), res);
     expect(res.statusCode).toBe(200);
     expect(json(res)).toEqual({ config: { appId: '102120114', requireMention: true, cwd: '/tmp/w' } });
+  });
+
+  it('GET config displays the model and preset chosen by a command in any QQ chat', async () => {
+    const config = { appId: 'bot', provider: 'old-provider', model: 'old-model', preset: 'old-preset', appSecret: 'never-return' };
+    const manager = new ModelResolver({ get: () => undefined } as unknown as Context, config as ImQQBotConfig);
+    manager.setOverride('qqbot:bot:c2c:alice', { provider: 'command-provider', model: 'command-model' });
+    manager.setPreset('qqbot:bot:group:room', 'command-preset');
+    const { routes } = createHarness({ boundAppId: () => 'bot', currentConfig: () => config }), res = fakeRes();
+    await invoke(routes.get(BIND_CONFIG_PATH), fakeReq('GET', { host: 'x' }), res);
+    expect(res.statusCode).toBe(200); expect(json(res)).toEqual({ config: { appId: 'bot', provider: 'command-provider', model: 'command-model', preset: 'command-preset' } });
+    expect(res.body).not.toContain('never-return');
+  });
+
+  it('a successful page model change takes shared authority without reviving the cleared value on sessionId writes', async () => {
+    const config = { appId: 'bot', provider: 'profile-old', model: 'profile-old-model', preset: 'profile-preset' };
+    const manager = new ModelResolver({ get: () => undefined } as unknown as Context, config as ImQQBotConfig);
+    const legacy = new PrefsStore(); legacy.setOverride('qqbot:bot:c2c:alice', { provider: 'legacy', model: 'preserved' });
+    manager.setOverride('qqbot:bot:group:room', { provider: 'command-provider', model: 'command-model' }); manager.setPreset('private', 'command-preset');
+    const saved = vi.fn((changes: Record<string, unknown>) => { Object.assign(config, changes); return true; });
+    const { routes } = createHarness({ boundAppId: () => 'bot', currentConfig: () => config, onUpdateConfig: saved }), res = fakeRes();
+    await invoke(routes.get(BIND_CONFIG_PATH), fakeReq('POST', { host: 'x' }, '{"model":"page-model"}'), res);
+    expect(res.statusCode).toBe(200); expect(saved).toHaveBeenCalledWith({ provider: 'command-provider', model: 'page-model' });
+    expect(manager.getEffectiveRoute('qqbot:bot:c2c:alice')).toEqual({ provider: 'command-provider', model: 'page-model' });
+    expect(manager.getEffectiveRoute('qqbot:bot:group:room')).toEqual({ provider: 'command-provider', model: 'page-model' });
+    manager.setSessionId('qqbot:bot:c2c:alice', 'preserved-history');
+    const fresh = new PrefsStore(); expect(fresh.getOverride(sharedPreferencesKey('bot'))).toBeUndefined();
+    expect(fresh.getOverride('qqbot:bot:c2c:alice')).toEqual({ provider: 'legacy', model: 'preserved' });
+    expect(fresh.getPreset(sharedPreferencesKey('bot'))).toBe('command-preset'); expect(fresh.getSessionId('qqbot:bot:c2c:alice')).toBe('preserved-history');
+  });
+
+  it('does not clear command preferences when the profile save fails or changes unrelated settings', async () => {
+    const config = { appId: 'bot', provider: 'profile', model: 'profile-model' }, key = sharedPreferencesKey('bot'), prefs = new PrefsStore();
+    prefs.setOverride(key, { provider: 'command', model: 'command-model' }); prefs.setPreset(key, 'command-preset');
+    const failed = createHarness({ boundAppId: () => 'bot', currentConfig: () => config, onUpdateConfig: () => false }), failure = fakeRes();
+    await invoke(failed.routes.get(BIND_CONFIG_PATH), fakeReq('POST', { host: 'x' }, '{"model":"not-saved","preset":"not-saved"}'), failure);
+    expect(failure.statusCode).toBe(500); expect(prefs.getOverride(key)?.model).toBe('command-model'); expect(prefs.getPreset(key)).toBe('command-preset');
+    const unrelated = createHarness({ boundAppId: () => 'bot', currentConfig: () => config, onUpdateConfig: () => true }), success = fakeRes();
+    await invoke(unrelated.routes.get(BIND_CONFIG_PATH), fakeReq('POST', { host: 'x' }, '{"streaming":false}'), success);
+    expect(success.statusCode).toBe(200); expect(prefs.getOverride(key)?.model).toBe('command-model'); expect(prefs.getPreset(key)).toBe('command-preset');
+  });
+
+  it('a page preset change clears only the matching AppID shared preset', async () => {
+    const prefs = new PrefsStore(), key = sharedPreferencesKey('bot');
+    prefs.setOverride(key, { provider: 'command', model: 'model' }); prefs.setPreset(key, 'command-preset');
+    prefs.setPreset(sharedPreferencesKey('other-bot'), 'other-preset'); prefs.setPreset('qqbot:bot:group:room', 'legacy-preset');
+    const { routes } = createHarness({ boundAppId: () => 'bot', currentConfig: () => ({ appId: 'bot' }), onUpdateConfig: () => true }), res = fakeRes();
+    await invoke(routes.get(BIND_CONFIG_PATH), fakeReq('POST', { host: 'x' }, '{"preset":"page-preset"}'), res);
+    expect(res.statusCode).toBe(200); expect(prefs.getPreset(key)).toBeUndefined(); expect(prefs.getOverride(key)?.model).toBe('model');
+    expect(prefs.getPreset(sharedPreferencesKey('other-bot'))).toBe('other-preset'); expect(prefs.getPreset('qqbot:bot:group:room')).toBe('legacy-preset');
   });
 
   it('POST config：白名单内合法值通过并触发合并写入', async () => {

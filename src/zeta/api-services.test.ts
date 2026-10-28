@@ -178,6 +178,48 @@ describe('external-service management routes', () => {
     expect((await call('/identity/reset', 'POST', { expected_revision: current.revision })).status).toBe(200);
     expect(state.settings.name).toBe('小鲸鱼'); expect(state.settings.group.waitMs).toBe(1234);
   });
+  it('merges concurrent API patches without replacing unrelated global settings', async () => {
+    const { call, state } = await fixture();
+    const responses = await Promise.all([
+      call('/settings', 'PATCH', { speech: { enabled: true } }),
+      call('/settings', 'PATCH', { images: { dailyLimit: 21 } }, 'yes', {}, LEGACY_ZETA_API_PATH),
+    ]);
+    expect(responses.map(response => response.status)).toEqual([200, 200]);
+    expect(state.settings).toMatchObject({ speech: { enabled: true }, images: { dailyLimit: 21 } });
+    expect(state.settings.speech.mimo.voice).toBe('mimo_default'); expect(state.settings.images.resolution).toBe('1K');
+    const before = state.settings;
+    expect((await call('/settings', 'PATCH', { speech: { enabled: false }, images: { unsupported: true } })).status).toBe(400);
+    expect((await call('/settings', 'PATCH', JSON.parse('{"speech":{"__proto__":{"enabled":false}}}'))).status).toBe(400);
+    expect((await call('/settings', 'PATCH', { speech: { enabled: false } }, 'no')).status).toBe(403);
+    expect((await call('/settings', 'PATCH', { speech: { enabled: false } }, 'yes', { origin: 'https://evil.example' })).status).toBe(400);
+    expect(state.settings).toEqual(before);
+  });
+  it('requires identity CAS only when a PATCH edits identity fields', async () => {
+    const { call, state } = await fixture(); const staleRevision = state.identity.revision;
+    await state.updateIdentity({ expected_revision: staleRevision, reason: '另一QQ聊天的新习惯', name: '大家共用的新名字', habits: ['先听完再说'] });
+    expect((await call('/settings', 'PATCH', { speech: { enabled: true } }, 'yes', { 'x-zeta-identity-revision': String(staleRevision) })).status).toBe(200);
+    const before = state.settings;
+    expect((await call('/settings', 'PATCH', { name: '旧页面的名字', images: { dailyLimit: 33 } }, 'yes', { 'x-zeta-identity-revision': String(staleRevision) })).status).toBe(400);
+    expect((await call('/settings', 'PATCH', { name: '没有版本的修改' })).status).toBe(400);
+    expect(state.settings).toEqual(before);
+    const revision = state.identity.revision;
+    const response = await call('/settings', 'PATCH', { persona: '当前公共人设' }, 'yes', { 'x-zeta-identity-revision': String(revision) });
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.settings).toMatchObject({ name: '大家共用的新名字', persona: '当前公共人设', habits: ['先听完再说'], speech: { enabled: true } });
+    expect(result.identity).toMatchObject({ name: result.settings.name, persona: result.settings.persona, revision: revision + 1 });
+  });
+  it('returns the identity accepted with this PATCH even when follow-up cleanup changes it', async () => {
+    const { call, state, browser } = await fixture(); const revision = state.identity.revision;
+    browser.quiesce.mockImplementationOnce(async () => {
+      await state.updateIdentity({ expected_revision: state.identity.revision, reason: '设置提交后的另一次会话更新', name: '随后另选的名字' });
+    });
+    const response = await call('/settings', 'PATCH', { name: '本次接受的名字' }, 'yes', { 'x-zeta-identity-revision': String(revision) });
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.settings.name).toBe('本次接受的名字'); expect(result.identity.name).toBe(result.settings.name); expect(result.identity.revision).toBe(revision + 1);
+    expect(state.identity.name).toBe('随后另选的名字'); expect(state.identity.revision).toBe(revision + 2);
+  });
   it('takes the state identity and revision together after asynchronous credential checks', async () => {
     const { call, state, runtime } = await fixture();
     vi.spyOn(runtime, 'credentialStatus').mockImplementationOnce(async () => {

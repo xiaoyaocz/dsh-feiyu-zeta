@@ -1,15 +1,5 @@
 import { registerZetaTool } from "./tools.js";
-export function mergeSettingsPatch(current, patch, depth = 0) {
-    if (depth > 12)
-        throw new Error('设置修改层级过深');
-    if (!patch || typeof patch !== 'object' || Array.isArray(patch))
-        return patch;
-    const entries = Object.entries(patch);
-    if (entries.some(([key]) => ['__proto__', 'prototype', 'constructor'].includes(key)))
-        throw new Error('设置字段无效');
-    const base = current && typeof current === 'object' && !Array.isArray(current) ? current : {};
-    return Object.fromEntries([...Object.entries(base).filter(([key]) => !Object.hasOwn(patch, key)), ...entries.map(([key, value]) => [key, mergeSettingsPatch(base[key], value, depth + 1)])]);
-}
+export { mergeSettingsPatch } from "../shared/settings-patch.js";
 export function registerSettingsTools(runtime, reconcile, closeBrowser) {
     const administrator = (agent) => {
         const authority = runtime.authorityFor(agent);
@@ -29,7 +19,8 @@ export function registerSettingsTools(runtime, reconcile, closeBrowser) {
             if (Object.hasOwn(args.changes, 'security'))
                 throw new Error('管理员名单只能由DSH所有者在管理页修改');
             const identityRevision = runtime.state.identity.revision;
-            const settings = await runtime.state.setSettings(mergeSettingsPatch(runtime.state.settings, args.changes), { expectedIdentityRevision: identityRevision });
+            const settings = await runtime.state.patchSettings(args.changes, { expectedIdentityRevision: identityRevision, signal: exec.signal,
+                beforeCommit: () => { exec.signal.throwIfAborted(); administrator(exec.agent); runtime.requireWritable(); } });
             if (!settings.browser.enabled)
                 await closeBrowser();
             try {

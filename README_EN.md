@@ -4,7 +4,7 @@
 
 A **personal testing and self-use experiment** combining QQ chat, an evolving whale-inspired persona, memory, shared stickers, speech, autonomous activity and optional cloud services in one DeepSeek Harness plugin. It is not an official DeepSeek, Tencent Connect or service-provider product, and it carries no production stability guarantee.
 
-Current version: **0.4.7**. Target: **DeepSeek Harness 0.2.1-rc.3 exactly**, **Node.js >=24.9.0**. The former plugin name was `dsh-zeta`; this repository root contains the plugin itself.
+Current version: **0.4.8**. Target: **DeepSeek Harness 0.2.1-rc.3 exactly**, **Node.js >=24.9.0**. The former plugin name was `dsh-zeta`; this repository root contains the plugin itself.
 
 ## Install from GitHub
 
@@ -64,9 +64,9 @@ npm run build
 npm run check:distribution
 npm pack
 
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.7.tgz -WhatIf
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.7.tgz
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.7.tgz -Profile desktop
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.8.tgz -WhatIf
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.8.tgz
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.8.tgz -Profile desktop
 ```
 
 The local `install.sh` helper supports an already installed DSH CLI. It accepts a local archive through `--package` and defaults to the `web` profile; see `./install.sh --help`.
@@ -85,6 +85,10 @@ Ordinary QQ and autonomous sessions may evolve their shared name, persona and ha
 Administrators request sensitive actions in natural language, without a command prefix. At execution time, the backend checks the real QQ sender against the current administrator list. Nicknames, quoted instructions, webpages or claims of administrator status grant no authority. Group requests are processed in separate sender-authority batches: ordinary messages can be combined, while an administrator's messages form an independent ordered turn. Mixed-source requests cannot inherit administrator rights. The dropdown lists only users actually observed by this bot, not a complete friend or group roster; saved administrators not yet re-observed remain clearly marked.
 
 Memory, speech, generated images, temporary webpage records, stickers and the persona image use one shared library. There is no management-space selector. Existing records merge automatically, retaining conflicting entries and original media without repeating paid requests or QQ deliveries. Group messages are briefly collected before the model chooses to reply or stay silent. Silence sends no placeholder to QQ. Autonomous activity uses model-selected one-shot schedules rather than a fixed recurring interval.
+
+Group and private chats share feature settings. Refreshing the owner panel updates untouched fields while preserving local edits. Saving sends only the changed fields, so an older page cannot revert speech or service settings just updated from another chat. Identity changes still have their own revision check.
+
+Group and private chats under the same bot AppID also share the conversation model and the default Agent preset for new sessions. An administrator's `/model` or `/preset` change in any chat updates that shared default. Models align before each chat's next request; old per-chat model and preset preferences no longer override the shared choice. Each chat retains its own history and destination. DSH locks the preset of a started session, so a new preset default applies to new sessions; use `/new` in the relevant chat to adopt it.
 
 When provided by the Host, `web_search`, `web_fetch` and `read_image` are available to ordinary QQ and autonomous sessions without administrator status. For ordinary QQ users, image reading accepts valid absolute paths only to images explicitly attached to the current inbound or quoted message, the persona image, shared generated or sticker images, shared screenshots and built-in stickers. It cannot open other chats' original attachments or arbitrary Host files; autonomous sessions can read only the shared materials above. Unknown plugin tools, Host file access, commands and plugin configuration still require a current real administrator request; QQ read-target lists, contact targets and contact limits continue to apply.
 

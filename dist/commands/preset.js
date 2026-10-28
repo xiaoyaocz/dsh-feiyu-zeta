@@ -3,7 +3,7 @@ export function presetCommand({ manager, config, isAdministrator }) {
     return {
         name: 'preset',
         category: 'agent',
-        description: '查看或切换 agent preset（用法: /preset [id]）',
+        description: '查看或修改所有QQ新会话的公共preset（用法: /preset [id]）',
         handler: async (cmdCtx) => {
             const { scope, peerId } = getScopePeer(cmdCtx);
             const args = (cmdCtx.command?.raw ?? '').trim();
@@ -15,10 +15,13 @@ export function presetCommand({ manager, config, isAdministrator }) {
                 if (presets.length === 0) {
                     return '当前部署无可用的 agent preset';
                 }
-                const record = manager.getSessionRecord(scope, peerId);
-                const currentId = record?.agentPreset ?? manager.getEffectivePreset(scope, peerId);
+                const status = manager.getStatus(scope, peerId);
+                const defaultId = manager.getEffectivePreset(scope, peerId);
                 const lines = ['### 🧩 Agent Preset', ''];
-                lines.push(`**当前:** ${currentId ?? '默认'}`);
+                lines.push(`**QQ新会话公共默认:** ${defaultId ?? '宿主默认'}`);
+                if (status.active)
+                    lines.push(`**此会话已使用:** ${status.preset ?? '无'}`);
+                lines.push('所有群聊和私聊的新会话共用此默认；已开始的会话保留原preset和历史。');
                 lines.push('', '**可用 preset（点击切换）:**');
                 for (const p of presets) {
                     const display = p.name ? `${p.name} (${p.id})` : p.id;
@@ -28,10 +31,10 @@ export function presetCommand({ manager, config, isAdministrator }) {
                 await sendMarkdownChunked(cmdCtx, lines.join('\n'), config.textChunkLimit);
                 return { kind: 'noop' };
             }
-            // reset / default：清除 per-peer 覆盖，回到默认
+            // reset / default：清除公共覆盖，回到配置／宿主默认
             if (args === 'reset' || args === 'default') {
                 const outcome = await manager.clearPresetOverride(scope, peerId);
-                return outcome.ok ? '✅ 已重置为默认 preset（新会话生效）' : '重置失败';
+                return outcome.ok ? '✅ 已重置QQ公共默认preset；所有群聊和私聊的新会话生效，已开始的会话保持原preset。' : '重置失败';
             }
             // 切换到指定 preset
             const outcome = await manager.setPresetOverride(scope, peerId, args);
@@ -47,7 +50,7 @@ export function presetCommand({ manager, config, isAdministrator }) {
                         return `切换失败: ${outcome.message ?? '未知错误'}`;
                 }
             }
-            return `✅ preset 已切换: ${args}\n新会话生效（当前会话保持原 preset，发送 /new 后生效）。`;
+            return `✅ QQ新会话公共preset已设为: ${outcome.presetId ?? args}\n所有群聊和私聊的新会话生效；当前会话保持原preset及历史，发送 /new 后使用新默认。`;
         },
     };
 }

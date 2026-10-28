@@ -3,7 +3,7 @@ export function modelCommand({ manager, config, isAdministrator }) {
     return {
         name: 'model',
         category: 'agent',
-        description: '查看或切换模型（用法: /model [provider/model]）',
+        description: '查看或修改所有QQ群和私聊的公共模型（用法: /model [provider/model]）',
         handler: async (cmdCtx) => {
             const { scope, peerId } = getScopePeer(cmdCtx);
             const args = (cmdCtx.command?.raw ?? '').trim();
@@ -22,8 +22,12 @@ export function modelCommand({ manager, config, isAdministrator }) {
                 const lines = [
                     '### 🤖 模型配置',
                     '',
-                    `**当前模型:** ${currentDisplay}`,
+                    `**QQ公共默认模型:** ${currentDisplay}`,
                 ];
+                const status = manager.getStatus(scope, peerId);
+                if (status.active)
+                    lines.push(`**此会话当前模型:** ${status.provider && status.model ? `${status.provider}/${status.model}` : '尚无请求记录'}`);
+                lines.push('所有群聊和私聊共用此默认模型；修改后各会话从下一次请求使用，对话历史保留。');
                 if (models.length > 0) {
                     lines.push('', '**可用模型（点击切换）:**');
                     for (const m of models) {
@@ -54,7 +58,7 @@ export function modelCommand({ manager, config, isAdministrator }) {
                 return '用法: /model provider/model\n示例: /model deepseek-official/deepseek-v4-flash';
             }
             await manager.setModelOverride(scope, peerId, { provider, model });
-            return `✅ 模型已切换: ${provider}/${model}\n立即生效，对话上下文保留。`;
+            return `✅ QQ公共默认模型已设为: ${provider}/${model}\n所有群聊和私聊从下一次请求使用；正在进行的回复继续完成，对话历史保留。`;
         },
     };
 }

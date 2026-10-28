@@ -6,25 +6,25 @@ export class ModelResolver {
     ctx;
     config;
     logger;
+    sharedKey;
     constructor(ctx, config, logger) {
         this.ctx = ctx;
         this.config = config;
         this.logger = logger;
+        this.sharedKey = sharedPreferencesKey(config.appId);
         this.prefs = new PrefsStore(config.debug ? (msg) => this.logger?.debug(msg) : undefined);
         this.settings = new SettingsReader();
     }
     /**
-     * 获取指定 sessionKey 的有效模型路由（create 用）
-     *
-     * 优先级：per-peer 偏好 > config 显式指定 > settings.yaml > 宿主服务
+     * 所有 QQ 聊天读取同一 AppID 公共模型；旧 peer 记录保留但不再覆盖它。
      */
-    getEffectiveRoute(sessionKey) {
-        return this.prefs.getOverride(sessionKey) ?? this.resolveDefault();
+    getEffectiveRoute(_sessionKey) {
+        return this.prefs.getOverride(this.sharedKey) ?? this.resolveDefault();
     }
     /**
      * 获取 resume 时覆盖 session 的模型路由
      *
-     * 优先级：per-peer 偏好 > cordis.yml 显式配置 > 默认链（settings.yaml > host）
+     * 与新建会话使用同一公共路由，避免旧会话恢复后继续分叉。
      *
      * 这里不返回 undefined，因为未装 installModelSelection，system-prompt 的
      * {{model}} 变量直接读 agent.options.model——若无值会抛
@@ -32,31 +32,25 @@ export class ModelResolver {
      * 因此兜底到默认链，确保 agent.options.model 始终有值。
      */
     getResumeRoute(sessionKey) {
-        const override = this.prefs.getOverride(sessionKey);
-        if (override)
-            return override;
-        if (this.config.provider && this.config.model) {
-            return { provider: this.config.provider, model: this.config.model };
-        }
-        return this.resolveDefault();
+        return this.getEffectiveRoute(sessionKey);
     }
     /**
-     * 设置 per-peer 模型偏好并持久化到隔离文件
+     * 从任一聊天设置 AppID 公共模型，保留旧 peer 记录供备份兼容。
      */
-    setOverride(sessionKey, route) {
-        this.prefs.setOverride(sessionKey, route);
+    setOverride(_sessionKey, route) {
+        this.prefs.setOverride(this.sharedKey, route);
     }
     /**
-     * 清除 per-peer 模型偏好并持久化
+     * 清除公共模型偏好，回到插件配置／宿主当前默认。
      */
-    clearOverride(sessionKey) {
-        this.prefs.clearOverride(sessionKey);
+    clearOverride(_sessionKey) {
+        this.prefs.clearOverride(this.sharedKey);
     }
     /**
-     * 是否存在指定 session 的模型偏好
+     * 是否存在 AppID 公共模型偏好。
      */
-    hasOverride(sessionKey) {
-        return this.prefs.hasOverride(sessionKey);
+    hasOverride(_sessionKey) {
+        return this.prefs.hasOverride(this.sharedKey);
     }
     /**
      * 获取指定 sessionKey 的最新 sessionId（fork 后记录，重启恢复用）
@@ -77,39 +71,39 @@ export class ModelResolver {
         this.prefs.clearSessionId(sessionKey);
     }
     /**
-     * 获取指定 sessionKey 的 per-peer preset 覆盖
+     * 获取 AppID 公共新会话 preset 默认。
      */
-    getPreset(sessionKey) {
-        return this.prefs.getPreset(sessionKey);
+    getPreset(_sessionKey) {
+        return this.prefs.getPreset(this.sharedKey);
     }
     /**
-     * 设置 per-peer preset 覆盖并持久化
+     * 设置公共新会话 preset 默认。
      */
-    setPreset(sessionKey, presetId) {
-        this.prefs.setPreset(sessionKey, presetId);
+    setPreset(_sessionKey, presetId) {
+        this.prefs.setPreset(this.sharedKey, presetId);
     }
     /**
-     * 清除 per-peer preset 覆盖并持久化
+     * 清除公共 preset 偏好；旧 peer 记录仍不参与选择。
      */
-    clearPreset(sessionKey) {
-        return this.prefs.clearPreset(sessionKey);
+    clearPreset(_sessionKey) {
+        return this.prefs.clearPreset(this.sharedKey);
     }
     /**
-     * 解析默认模型路由（不含 per-peer 偏好）
+     * 解析默认模型路由（不含公共聊天命令偏好）
      *
-     * 优先级：config 显式指定 > settings.yaml（只读） > 宿主 agentDefaultModel
+     * 优先级：config 显式指定 > 宿主动态默认 > 遗留 settings.yaml（只读）
      * 最终兜底 deepseek-official/deepseek-v4-flash，确保 {{model}} 变量始终有值。
      */
     resolveDefault() {
         if (this.config.provider && this.config.model) {
             return { provider: this.config.provider, model: this.config.model };
         }
-        const fromSettings = this.settings.readDefaultRoute();
-        if (fromSettings)
-            return fromSettings;
         const fromHost = this.readFromHost();
         if (fromHost)
             return fromHost;
+        const fromSettings = this.settings.readDefaultRoute();
+        if (fromSettings)
+            return fromSettings;
         return { provider: 'deepseek-official', model: 'deepseek-v4-flash' };
     }
     /**
@@ -202,5 +196,9 @@ export class ModelResolver {
         }
         return undefined;
     }
+}
+/** Configuration identity only: never use it as a conversation/session identity. */
+export function sharedPreferencesKey(appId) {
+    return `qqbot:${appId}:shared`;
 }
 //# sourceMappingURL=model-resolver.js.map

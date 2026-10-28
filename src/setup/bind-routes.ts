@@ -22,6 +22,8 @@ import { getProfileDir } from '../shared/index.ts';
 import { AccessControlSchema } from '../config.ts';
 import { compatibleRoutePaths } from '../shared/host-routes.ts';
 import { QQBOT_API_PATH, LEGACY_QQBOT_API_PATH } from '../shared/http-paths.ts';
+import { PrefsStore } from '../model/prefs-store.ts';
+import { sharedPreferencesKey } from '../model/model-resolver.ts';
 import {
   BIND_CONFIG_PATH,
   BIND_MANUAL_PATH,
@@ -110,6 +112,12 @@ const EDITABLE_CONFIG_SCHEMAS: Record<string, (value: unknown) => unknown> = {
   directPrompt: stringSchema('directPrompt'),
   access: (v) => AccessControlSchema(v as never),
 };
+
+function sharedPreferences(options: BindRoutesOptions, current: Record<string, unknown>): { store: PrefsStore; key: string } | undefined {
+  const appId = options.boundAppId?.() ?? current.appId;
+  if (typeof appId !== 'string' || !appId.trim() || appId === '__FROM_ENV__' || /[:\s]/.test(appId)) return undefined;
+  return { store: new PrefsStore(), key: sharedPreferencesKey(appId) };
+}
 
 function booleanSchema(value: unknown, name: string): boolean {
   if (typeof value !== 'boolean') throw new TypeError(`${name} 必须是布尔值`);
@@ -373,6 +381,14 @@ async function handleConfig(req: IncomingMessage, res: ServerResponse, options: 
     const current = options.currentConfig?.() ?? {};
     // appSecret 永不回传；其余（含只读 cwd）原样回显
     const { appSecret: _s, ...safe } = current;
+    try {
+      const shared = sharedPreferences(options, current);
+      if (shared) {
+        const model = shared.store.getOverride(shared.key), preset = shared.store.getPreset(shared.key);
+        if (model) Object.assign(safe, model);
+        if (preset) safe.preset = preset;
+      }
+    } catch { sendJson(res, 500, { error: 'QQ公共配置无法读取，请检查配置文件后重试' }); return; }
     sendJson(res, 200, { config: safe });
     return;
   }
@@ -416,6 +432,23 @@ async function handleConfig(req: IncomingMessage, res: ServerResponse, options: 
     return;
   }
 
+  const changesModel = Object.hasOwn(validated, 'provider') || Object.hasOwn(validated, 'model');
+  const changesPreset = Object.hasOwn(validated, 'preset');
+  let shared: ReturnType<typeof sharedPreferences>;
+  try {
+    const current = options.currentConfig?.() ?? {};
+    if (changesModel || changesPreset) shared = sharedPreferences(options, current);
+    if (changesModel && shared) {
+      const selected = shared.store.getOverride(shared.key);
+      // Editing just provider or model must retain the other value currently
+      // shown in the form, including a preceding /model command selection.
+      validated = { ...validated,
+        provider: Object.hasOwn(validated, 'provider') ? validated.provider : selected?.provider ?? current.provider ?? '',
+        model: Object.hasOwn(validated, 'model') ? validated.model : selected?.model ?? current.model ?? '',
+      };
+    }
+  } catch { sendJson(res, 500, { ok: false, error: 'QQ公共配置无法读取，本次配置未保存' }); return; }
+
   const persisted = options.onUpdateConfig === undefined
     ? updateProfileConfig(validated, getProfileDir() ?? undefined, undefined)
     : options.onUpdateConfig(validated);
@@ -423,5 +456,11 @@ async function handleConfig(req: IncomingMessage, res: ServerResponse, options: 
     sendJson(res, 500, { ok: false, error: '无法定位 profile 目录或写入失败' });
     return;
   }
+  try {
+    // Only a successful explicit profile change takes authority from the
+    // corresponding chat-command preference. All legacy peer rows survive.
+    if (shared && changesModel) shared.store.clearOverride(shared.key);
+    if (shared && changesPreset) shared.store.clearPreset(shared.key);
+  } catch { sendJson(res, 500, { ok: false, error: '配置已写入，但公共偏好更新失败，请重试保存' }); return; }
   sendJson(res, 200, { ok: true, message: '配置已保存，插件将自动重载（进行中的机器人会话将重置）' });
 }

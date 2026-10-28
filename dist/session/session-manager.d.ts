@@ -13,6 +13,7 @@ export declare class SessionManager {
     private readonly agents;
     private readonly config;
     private readonly logger;
+    private readonly modelUpdates;
     /** 由 bootstrap 注入的问答通道（ask_user_question → QQ），会话回收时清理其待答问题 */
     questionChannel?: QuestionChannel;
     /** 由 bootstrap 注入的审批通道（approval/request → QQ），会话回收时清理其待批审批 */
@@ -32,13 +33,13 @@ export declare class SessionManager {
      */
     private getPresetsService;
     /**
-     * 从 session 持久化 header 读 session 当初的 preset（started 锁定语义）。
-     * 读不到（服务缺失 / session 不存在 / 未记录 agentPreset）返回 undefined。
+     * Read the native projection, including blank-session selection events.
+     * An existing Session without a preset must not acquire the new default.
      */
     private resolvePersistedPreset;
     getEffectiveModel(scope: ChatScope, peerId: string): ModelRoute | undefined;
     /**
-     * 获取指定 peer 的生效 preset（per-peer 覆盖 > config.preset）
+     * 获取所有 QQ 新会话共享的 preset 默认。
      */
     getEffectivePreset(scope: ChatScope, peerId: string): string | undefined;
     /** 按 sessionKey 解析生效 preset */
@@ -48,18 +49,18 @@ export declare class SessionManager {
      */
     listPresets(): Promise<PresetEntry[]>;
     /**
-     * 通过 DSH 原生选择模型，保留当前会话及完整历史。
+     * 从任一聊天保存公共模型；运行中的 Agent 留到下次请求再对齐。
      */
     setModelOverride(scope: ChatScope, peerId: string, route: ModelRoute): Promise<void>;
     /**
-     * 切换指定 peer 的 agent preset（per-peer 覆盖）
+     * 修改所有 QQ 新会话的公共 preset 默认。
      *
      * 已开始的会话保持锁定（blank-session contract）：只持久化为新会话默认，
      * 不 fork/rebuild 当前会话，避免历史工具调用与新 preset 工具集冲突。
      */
     setPresetOverride(scope: ChatScope, peerId: string, presetId: string): Promise<PresetSwitchOutcome>;
     /**
-     * 清除 per-peer preset 覆盖，回到 config.preset / 默认（新会话生效）
+     * 清除公共 preset 覆盖，回到 config.preset / 默认（新会话生效）
      */
     clearPresetOverride(scope: ChatScope, peerId: string): Promise<PresetSwitchOutcome>;
     clearModelOverride(scope: ChatScope, peerId: string): void;
@@ -73,6 +74,13 @@ export declare class SessionManager {
     exportMarkdown(scope: ChatScope, peerId: string): string;
     private countMessages;
     private sessionKey;
+    private getService;
+    private projection;
+    private presetForAgent;
+    /** Native pending selection, last request and initial options are distinct facts. */
+    private currentModel;
+    /** Reconcile at admission, without cancelling or rebuilding any conversation. */
+    private alignModel;
     private deriveSessionId;
     private currentSessionId;
     private composePreset;
