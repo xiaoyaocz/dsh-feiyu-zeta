@@ -95,3 +95,30 @@ test('does not modify the bundled SQLite database', async () => fixture(async ro
   const path = join(root, 'vendor/dsh-meme/memes/dafeiyu-001/index.db'), before = await readFile(path);
   await checkDistribution(root); assert.deepEqual(await readFile(path), before);
 }));
+test('optionally validates clean npm locks and rejects the real old pnpm/link contamination', async () => fixture(async (root, manifest) => {
+  const path = join(root, 'package-lock.json');
+  const clean = { name: manifest.name, version: manifest.version, lockfileVersion: 3, packages: {
+    '': { name: manifest.name, version: manifest.version },
+    'node_modules/qrcode-terminal': { version: '0.12.0', resolved: 'https://registry.npmjs.org/qrcode-terminal/-/qrcode-terminal-0.12.0.tgz' },
+    'node_modules/git-fixture': { version: 'git+https://github.com/example/package.git#commit', resolved: 'git+ssh://git@github.com/example/package.git#commit' },
+  } };
+  assert.equal((await checkDistribution(root)).lockfile, false);
+  await writeFile(path, JSON.stringify(clean)); assert.equal((await checkDistribution(root)).lockfile, true);
+  // Exact package paths/resolved values observed in the previous contaminated lock.
+  const badPackages = [
+    ['node_modules/.pnpm/@deepseek-ai+cordis@4.0.1', { extraneous: true }],
+    ['node_modules/.pnpm/@tencent-connect+qqbot-connector@1.2.0/node_modules/qrcode-terminal', { resolved: 'node_modules/.pnpm/qrcode-terminal@0.12.0/node_modules/qrcode-terminal', link: true }],
+    ['node_modules/@tencent-connect/qqbot-connector', { resolved: 'node_modules/.pnpm/@tencent-connect+qqbot-connector@1.2.0/node_modules/@tencent-connect/qqbot-connector', link: true }],
+    ['node_modules/old-source', { resolved: '../local-source/store' }],
+    ['node_modules/old-source', { resolved: 'file:F:/ProjectZeta/node_modules/package' }],
+    ['node_modules/old-source', { resolved: 'https://registry.example/.pnpm/source/package.tgz' }],
+    ['../local-source/package', { version: '1.0.0' }],
+  ];
+  for (const [name, record] of badPackages) {
+    await writeFile(path, JSON.stringify({ ...clean, packages: { ...clean.packages, [name]: record } }));
+    await assert.rejects(checkDistribution(root), /npm lockfile (?:contains a non-portable link|references|resolved dependency uses local source)/);
+  }
+  for (const [field, value] of [['name', 'another-package'], ['version', 'old-version'], ['packages', { ...clean.packages, '': { name: manifest.name, version: 'old-root-version' } }]]) {
+    await writeFile(path, JSON.stringify({ ...clean, [field]: value })); await assert.rejects(checkDistribution(root), /name\/version differs/);
+  }
+}));

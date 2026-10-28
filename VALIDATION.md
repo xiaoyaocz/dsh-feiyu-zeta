@@ -8,9 +8,14 @@
 
 仓库直接提交 `dist/`、`lib/` 及原有运行资源，不依赖安装时的编译钩子；保留精确宿主兼容要求。新增分发完整性检查和 GitHub CI，检查干净构建是否与提交的产物一致。
 
-本轮类型检查、507 项单元与协议测试、11 项分发检查器测试通过；干净构建产物检查覆盖 129 个文件、92 个 JavaScript 文件、156 条相对依赖和 SQLite 索引中的 24 张内置表情。实际 npm 归档解压后可在无 `node_modules` 的目录运行分发检查器。Windows 安装助手的 GitHub 来源及桌面 profile 计划已用 `-WhatIf` 检查，未修改日常配置。
+本轮类型检查、507 项单元与协议测试、12 项分发检查器测试通过；干净构建产物检查覆盖源码分发中的 130 个文件（安装包省略锁文件时为 129 个）、92 个 JavaScript 文件、156 条相对依赖和 SQLite 索引中的 24 张内置表情。实际 npm 归档解压后可在无 `node_modules` 的目录运行分发检查器。Windows 安装助手的 GitHub 来源及桌面 profile 计划已用 `-WhatIf` 检查，未修改日常配置。
 
-本地预验证使用官方 DSH rc.3 / pnpm 11 的 `git+file` 固定提交来源，在全离线、独立 profile 中完成安装、首次运行及重启。0.4.3 代码与预构建分发方案的基线通过 132 项检查，未触发安装脚本或构建审批，结果位于 `output/host-git-local-0.4.3-final/summary.json`。正式 0.4.4 GitHub 来源的固定提交验证在发布后补录；该基线不等同于正式远程验证。
+官方 DSH rc.3 / pnpm 11 的两条 Git 安装路径均已完成实际验证：
+
+- 本地 `git+file` 全离线安装正式 0.4.4 固定提交，132 项检查通过，结果位于 `output/host-git-local-0.4.4/summary.json`。
+- 直接从 GitHub 安装 [`296f2d08042c7a11160e43c35bc4b8b127103a29`](https://github.com/xiaoyaocz/dsh-feiyu-zeta/commit/296f2d08042c7a11160e43c35bc4b8b127103a29)，132 项检查通过，结果位于 `output/host-github-0.4.4/summary.json`。锁文件记录了指定提交，首次运行 84 项、重启 36 项及安装产物 12 项均通过；宿主入口、设置页模块标识、语言资源、Schedule 包装入口、24 张表情均完整。
+
+两条路径均未使用安装编译钩子或构建审批，首次运行调用本地假模型 14 次、重启零次，没有发送真实 QQ 消息或调用收费服务。日常 profile 未被修改。首次 Linux CI 发现旧 npm 锁文件混入本地 pnpm 链接，Windows 父目录依赖掩盖了缺包。已从仅含 package.json 的干净目录重新生成纯 registry 锁文件，并用 npm ci --ignore-scripts 安装的独立副本通过类型检查、507 项测试及 12 项分发检查器测试；二维码终端依赖确认位于该副本内。检查器新增锁文件回归检查。使用新锁文件重建后的页面通过 83 项浏览器检查。Linux / Node 24 的干净构建一致性由 [GitHub CI](https://github.com/xiaoyaocz/dsh-feiyu-zeta/actions) 继续核验。
 
 可复跑正式 GitHub 验证：
 

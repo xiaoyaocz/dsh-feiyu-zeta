@@ -97,6 +97,26 @@ export function moduleSpecifiers(source) {
   return [...new Set(found)];
 }
 
+function checkLockfile(lock, manifest) {
+  if (!lock || ![2, 3].includes(lock.lockfileVersion) || !lock.packages || typeof lock.packages !== 'object' || Array.isArray(lock.packages)) fail('Invalid npm lockfile packages');
+  const root = lock.packages[''];
+  if (lock.name !== manifest.name || lock.version !== manifest.version || root?.name !== manifest.name || root?.version !== manifest.version) fail('npm lockfile name/version differs from package.json');
+  const normalized = value => { try { return decodeURIComponent(value).replaceAll('\\', '/'); } catch { fail('Invalid npm lockfile path encoding'); } };
+  for (const [path, record] of Object.entries(lock.packages)) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) fail(`Invalid npm lockfile package: ${path}`);
+    if (record.link === true) fail(`npm lockfile contains a non-portable link: ${path}`);
+    const location = normalized(path);
+    if (/(?:^|\/)\.pnpm(?:\/|$)/iu.test(location)) fail(`npm lockfile references a local .pnpm store: ${path}`);
+    if (location && (!location.startsWith('node_modules/') || location.split('/').some(part => part === '..' || part === '.'))) fail(`npm lockfile references local source: ${path}`);
+    if (record.resolved === undefined) continue;
+    if (typeof record.resolved !== 'string') fail(`Invalid npm lockfile resolved value: ${path}`);
+    const resolved = normalized(record.resolved);
+    if (/(?:^|\/)\.pnpm(?:\/|$)/iu.test(resolved)) fail(`npm lockfile references a local .pnpm store: ${path}`);
+    // Registry URLs and Git URLs (including scp-style Git SSH) remain valid.
+    if (/^(?:git\+)?(?:file|link|workspace):/iu.test(resolved) || !(/^(?:https?:|git(?:\+https?|\+ssh)?:|ssh:|github:|gitlab:|bitbucket:)/iu.test(resolved) || /^[\w.-]+@[^/:]+:.+/u.test(resolved))) fail(`npm lockfile resolved dependency uses local source: ${path}`);
+  }
+}
+
 export async function checkDistribution(directory) {
   const root = await realpath(resolve(directory)), checked = new Set();
   const inside = value => { const path = relative(root, value); return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path); };
@@ -125,6 +145,8 @@ export async function checkDistribution(directory) {
   }
   const manifest = JSON.parse(await readFile(await file('package.json'), 'utf8'));
   if (typeof manifest.name !== 'string' || !manifest.name) fail('Package name is missing');
+  const lockfile = (await readdir(root)).some(name => name.toLowerCase() === 'package-lock.json');
+  if (lockfile) checkLockfile(JSON.parse(await readFile(await file('package-lock.json'), 'utf8')), manifest);
   for (const hook of ['prepare', 'preinstall', 'install', 'postinstall']) if (manifest.scripts?.[hook]) fail(`Distribution must not require an installation lifecycle: ${hook}`);
   for (const key of ['main', 'types', 'icon']) await file(manifest[key]);
   async function exportsExist(value) {
@@ -182,7 +204,7 @@ export async function checkDistribution(directory) {
       await file(slash(relative(root, target))); relativeImports++;
     }
   }
-  return { name: manifest.name, version: manifest.version, files: checked.size, jsFiles, relativeImports, bundledMemes: rows.length };
+  return { name: manifest.name, version: manifest.version, files: checked.size, jsFiles, relativeImports, bundledMemes: rows.length, lockfile };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
