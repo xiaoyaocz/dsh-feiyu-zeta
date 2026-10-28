@@ -30,11 +30,17 @@ const BUSINESS_TOOLS = new Set([
     'zeta_persona_reference', 'zeta_deploy_page', 'zeta_deploy_status', 'zeta_deploy_delete',
 ]);
 const OUTGOING_TOOLS = new Set(['zeta_send_message', 'send_meme', 'qqbot_send_file', 'ask_user_question']);
-export function toolDenial(name, authority, groupDecision) {
+/** Native exploration is granted to the internal life session, never a QQ role. */
+const LIFE_EXPLORATION_TOOLS = new Set(['web_search', 'web_fetch', 'read_image']);
+export function toolDenial(name, authority, groupDecision, actor = 'qq') {
     if (groupDecision !== undefined && groupDecision !== 'reply' && (OUTGOING_TOOLS.has(name) || name === 'zeta_speech_generate'))
         return '群聊本轮尚未决定回复；请先调用 zeta_group_decide，沉默时不会发送任何QQ消息。';
-    if (!authority?.administrator && !BUSINESS_TOOLS.has(name))
-        return '此操作仅允许配置名单内的管理员发起；当前消息的真实发送者没有管理员权限。';
+    if (!BUSINESS_TOOLS.has(name) && !(actor === 'life' && LIFE_EXPLORATION_TOOLS.has(name))) {
+        if (actor === 'life')
+            return '自主生活不能执行管理员敏感操作；修改配置、插件、凭据及宿主文件或执行命令，需要当前真实管理员发起请求。';
+        if (!authority?.administrator)
+            return '此操作仅允许配置名单内的管理员发起；当前消息的真实发送者没有管理员权限。';
+    }
     return undefined;
 }
 //# sourceMappingURL=permissions.js.map

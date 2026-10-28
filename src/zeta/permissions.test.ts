@@ -35,4 +35,15 @@ describe('trusted administrator request authorization', () => {
       expect(toolDenial(name, undefined, 'reply')).toBeUndefined();
     }
   });
+  it('grants explicit native exploration to life without administrator or QQ privileges', () => {
+    const admin = requestAuthority('app', [source('owner', '管理员请求')], ['owner']);
+    for (const name of ['read_image', 'web_search', 'web_fetch']) {
+      expect(toolDenial(name, undefined, undefined, 'life')).toBeUndefined();
+      expect(toolDenial(name, undefined)).toBeDefined();
+    }
+    for (const name of ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'working_directory', 'run_code', 'delegate', 'zeta_settings_get', 'zeta_settings_update', 'plugin_update', 'credentials_set', 'new_plugin_tool']) {
+      expect(toolDenial(name, undefined, undefined, 'life')).toBeDefined();
+      expect(toolDenial(name, admin, undefined, 'life')).toBeDefined();
+    }
+  });
 });

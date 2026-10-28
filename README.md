@@ -4,7 +4,7 @@
 
 dsh-feiyu-zeta 将 QQ 接入、人设与形象图、长期记忆、共享表情、语音、自主活动、云浏览器、临时网页和生图集成在一个 DSH 插件中。对话模型、会话、工具执行、凭据及自动任务沿用 DeepSeek Harness。
 
-当前版本 **0.4.5**，仅适配 **DSH 0.2.1-rc.3**，Node.js 要求 **>=24.9.0**。插件原名 `dsh-zeta`；代码与数据独立于旧 ProjectZeta 主工程，不会读取旧主工程数据库。0.3.0 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 数据及加密备份有升级兼容处理；实际安装、迁移验证范围见 [VALIDATION.md](./VALIDATION.md)。
+当前版本 **0.4.6**，仅适配 **DSH 0.2.1-rc.3**，Node.js 要求 **>=24.9.0**。插件原名 `dsh-zeta`；代码与数据独立于旧 ProjectZeta 主工程，不会读取旧主工程数据库。0.3.0 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 数据及加密备份有升级兼容处理；实际安装、迁移验证范围见 [VALIDATION.md](./VALIDATION.md)。
 
 ## 安装与升级
 
@@ -67,18 +67,18 @@ npm run check:distribution
 npm pack
 ```
 
-打包得到 `dsh-feiyu-zeta-0.4.5.tgz`。安装助手仍支持本地包：
+打包得到 `dsh-feiyu-zeta-0.4.6.tgz`。安装助手仍支持本地包：
 
 ```powershell
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.5.tgz -WhatIf
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.5.tgz
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.5.tgz -Profile desktop
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.6.tgz -WhatIf
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.6.tgz
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.6.tgz -Profile desktop
 ```
 
 其他平台已有 DSH CLI 时，可使用本仓库的本地归档安装脚本，默认安装到 `web` profile：
 
 ```sh
-./install.sh --package ./dsh-feiyu-zeta-0.4.5.tgz
+./install.sh --package ./dsh-feiyu-zeta-0.4.6.tgz
 ```
 
 可用参数见 `./install.sh --help`；脚本使用已有 DSH，不代为从 npm 安装宿主。开发时保留 `npm run build`；源码变更应连同重新生成的 `dist/`、`lib/` 一起提交。CI 会从干净目录重建并检查已提交产物与源码一致，也会核对 Git 和 npm 归档中的完整运行文件。
@@ -107,7 +107,7 @@ npm pack
 
 群消息按发送者权限分别处理：普通成员的连续消息可以合并；遇到管理员消息时建立独立、顺序执行的回合，同一管理员连续发言仍可合并。其他成员、引用文本或网页内容不能继承管理员权限；即使混合来源意外进入同一请求，敏感操作也会被拒绝。审批按钮同样核对实际点击者和本次请求。
 
-插件内置 `zeta_settings_get / zeta_settings_update` 供管理员读取和局部修改功能配置；管理员名单与密钥仍由 DSH 所有者在管理页维护。名称、人设与习惯允许 AI 自主调整，使用专门的身份工具，不会因此取得功能配置或宿主管理权限。普通聊天及自主活动只开放业务清单中的工具，新出现的宿主管理工具默认拒绝。
+插件内置 `zeta_settings_get / zeta_settings_update` 供管理员读取和局部修改功能配置；管理员名单与密钥仍由 DSH 所有者在管理页维护。名称、人设与习惯允许 AI 自主调整，使用专门的身份工具，不会因此取得功能配置或宿主管理权限。普通 QQ 聊天只开放业务清单中的工具；自主活动另有下文说明的原生探索能力。新出现的宿主管理工具默认拒绝。
 
 这层限制约束本插件 QQ 与自主 Agent 的工具调用；DSH 插件本身是可信宿主代码，不能将其视为任意第三方插件的操作系统隔离。
 
@@ -188,11 +188,13 @@ MiMo / MiniMax 分别保存 `ZETA_MIMO_API_KEY` / `ZETA_MINIMAX_API_KEY`。默�
 
 自主活动沿用一个 DSH 独立会话和原生 Schedule **一次性任务**，没有固定活动周期，也不运行插件自建的长期唤醒循环。每轮由 AI 通过 `zeta_life_plan_next` 选择下次时间、延迟或暂不安排；首次开启先安排一次规划回合。暂不安排或本轮未规划时等待再次手动唤醒，失败也不会悄悄恢复固定轮询。
 
+宿主提供相应工具时，自主生活的稳定内部会话可用 `web_search` 搜索、`web_fetch` 阅读网页、`read_image` 看图。看图只接受人设图、公共图片素材（生成图与共享收藏）、共享截图及内置表情的有效绝对路径。这三项原生探索能力不向普通 QQ 会话开放，也不授予管理员身份；未知插件工具、宿主文件读写、命令执行及插件配置仍需真实管理员发起请求。QQ 可读取名单、主动联系目标及次数等限制继续生效。
+
 在 **自主生活** 配置兴趣、时区、安静时段、最短间隔及每日次数上限。默认最短间隔 **5 分钟**、每日 **48 次**，时区 `Asia/Shanghai`，安静时段 **23:00–08:00**；这些是资源边界，实际下次时间由 AI 决定，页面展示接受的时间与原因。保存的计划会在宿主重启后恢复，重复投递通过持久 runId 去重。
 
 先保持“允许主动联系”关闭，按需勾选可读取聊天，再测试“现在活动一次”。需要分享时另外选择主动联系目标、允许的表情或语音。主动联系默认关闭，每日最多 3 次，同一目标冷却 180 分钟，同时受安静时段和 QQ 平台能力限制。内部总结不会自动成为 QQ 消息；只有真实发送回执才表示平台接受。
 
-“停止当前活动”关闭自主生活、取消当前回合、撤销本插件的有效计划，并拒绝已入队的旧唤醒。DSH 未运行时不会执行；重新开启后可重新规划。自主活动可以调整自己的名称、人设和习惯，但没有管理员权限，只能使用已启用且获准的业务工具。
+“停止当前活动”关闭自主生活、取消当前回合、撤销本插件的有效计划，并拒绝已入队的旧唤醒。DSH 未运行时不会执行；重新开启后可重新规划。自主活动可以调整自己的名称、人设和习惯，但没有管理员权限，只能使用已启用且获准的工具。
 
 ## 备份与换机迁移
 
@@ -232,13 +234,13 @@ npm run check:distribution
 测试覆盖协议模拟、工具权限、身份演变与版本冲突、群沉默与合并、计划恢复、图库迁移及备份等。模拟测试不会证明真实收费服务可用；真实端到端验证应使用自己的账户、短任务，并核对外部回执。真实宿主验证脚本使用桌面版自带 DSH、独立临时 home 和本地假模型，检查原生工具调用、普通 QQ 与自主活动的身份修改、权限边界及重启持久化；不会读取日常 profile：
 
 ```powershell
-node scripts/verify-host.mjs --package .\dsh-feiyu-zeta-0.4.5.tgz
+node scripts/verify-host.mjs --package .\dsh-feiyu-zeta-0.4.6.tgz
 ```
 
 双机迁移脚本另建两个独立临时 DSH home，检查身份、审计记录与原生会话等内容的加密备份及恢复：
 
 ```powershell
-node scripts/verify-backup-host.mjs --package .\dsh-feiyu-zeta-0.4.5.tgz
+node scripts/verify-backup-host.mjs --package .\dsh-feiyu-zeta-0.4.6.tgz
 ```
 
 ## 来源与使用范围

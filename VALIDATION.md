@@ -1,10 +1,18 @@
 # dsh-feiyu-zeta 验证范围与记录
 
-当前项目：[xiaoyaocz/dsh-feiyu-zeta](https://github.com/xiaoyaocz/dsh-feiyu-zeta)，版本 `0.4.5`。目标宿主为 DeepSeek Harness `0.2.1-rc.3`，Node.js `>=24.9.0`。
+当前项目：[xiaoyaocz/dsh-feiyu-zeta](https://github.com/xiaoyaocz/dsh-feiyu-zeta)，版本 `0.4.6`。目标宿主为 DeepSeek Harness `0.2.1-rc.3`，Node.js `>=24.9.0`。
 
 这是个人测试、自用实验项目。验证用于说明实际检查过的行为，不是生产稳定性承诺。更名前的旧包结果与更名后的新包结果分别记录。
 
-## 0.4.5 fnOS 子路径兼容
+## 0.4.6 自主生活原生探索权限
+
+修正内部自主生活调用 `read_image`、`web_search`、`web_fetch` 被当作普通 QQ 用户而要求管理员的问题。仅为已启用的稳定自主生活会话授予这三项原生探索能力，不授予管理员角色，也不扩大普通 QQ 用户权限。看图只接受人设图、公共图片素材、共享截图及内置表情的绝对路径，并检查真实路径，拒绝私聊原件、其他宿主文件、越界和链接重定向。关闭自主生活后，原会话继续受保护，工具权限立即收回；修改配置、插件、凭据、文件及执行命令仍不向自主生活开放。
+
+本轮类型检查、构建及 43 个测试文件的 520 项测试通过。新增权限测试覆盖全局与 Agent 作用域两层 guard、精确工具清单、伪身份及伪管理员请求、启停收权、图片路径与符号链接、原有读取名单、联系目标和冷却限制。
+
+`node scripts/verify-host.mjs --package ./dsh-feiyu-zeta-0.4.6.tgz --output ./output/host-life-exploration-0.4.6-verified` 在原生 DSH rc.3 隔离 home 完成安装、运行与重启，160 项检查通过（安装产物 10 项、首次运行 107 项、重启 43 项）。实际上传有效人设 PNG，原生 `read_image` 返回持久图像附件；原生 `web_search`、`web_fetch` 各调用一次测试专用离线 provider。普通 QQ 使用这三项工具、自主会话读取范围外图片、伪管理员元数据触发原生文件写入均被拒绝；停止后重启的旧自主会话仍不能使用这三项工具。首次运行调用本地假模型 14 次，重启零次，没有外网搜索、真实 QQ 或收费服务调用。未在 NAS 真机验证。
+
+## 0.4.5 fnOS 子路径兼容（历史）
 
 新客户端统一访问 `/plugins/dsh-feiyu-zeta/qqbot/...` 和 `/plugins/dsh-feiyu-zeta/api/...`。宿主同时保留 `/qqbot/im-qqbot/...`、`/zeta/api/...` 旧别名，使用相同业务处理、owner 准入和来源校验。管理 API 改为随 Web 服务就绪、替换及卸载注册和清理，避免仅在初始化时探测一次而漏注册。
 

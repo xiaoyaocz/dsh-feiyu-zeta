@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { mkdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -139,7 +140,7 @@ export class ZetaRuntime implements ModuleHost {
   private secureAgent(agent: DshAgent): void {
     if (!agent.ctx || this.securedAgents.has(agent)) return;
     const tools = agent.ctx.tools;
-    const disposeGuard = tools.guard(exec => this.denialFor(agent, exec.name));
+    const disposeGuard = tools.guard(exec => this.denialFor(agent, exec.name, exec.arguments));
     let disposeMode: (() => void) | undefined;
     try {
       // Do not redeclare an already-native preset on the same scope. An
@@ -161,15 +162,38 @@ export class ZetaRuntime implements ModuleHost {
   authorityFor(agent: unknown): RequestAuthority | undefined { return this.requests.get(agentId(agent))?.authority; }
   isAdministrator(senderId: string): boolean { return this.state.settings.security.administrators.includes(senderId); }
   canApprove(agent: unknown, senderId?: string): boolean {
+    if (this.isLifeAgent(agent)) return false;
     const request = this.requests.get(agentId(agent));
     return !!request?.authority.administrator && !!request.authority.senderId && this.isAdministrator(request.authority.senderId) && (!senderId || request.authority.senderId === senderId) && (!request.group || request.decision === 'reply');
   }
-  private denialFor(agent: unknown, name: string): string | undefined {
+  private lifeImageDenial(args: unknown): string | undefined {
+    const file = (args as { file_path?: unknown } | undefined)?.file_path;
+    if (typeof file !== 'string' || !isAbsolute(file) || file.includes('\0')) return '自主生活看图请使用人设图或公共图片素材的绝对路径。';
+    const roots = [
+      join(this.dataDir, 'persona'), join(this.dataDir, 'memes', 'shared'),
+      join(this.dataDir, 'images', spaceDirectory(this.selfSpace)),
+      join(this.dataDir, 'browser', 'screenshots', spaceDirectory(this.selfSpace)),
+      resolve(import.meta.dirname, '../../vendor/dsh-meme/memes'),
+    ];
+    const path = resolve(file);
+    const root = roots.find(candidate => within(path, candidate));
+    if (!root) return '自主生活只能读取人设图和公共图片素材，不能读取其他宿主文件或聊天原始附件。';
+    try {
+      const allowed = realpathSync(root);
+      const expected = within(root, this.dataDir) ? resolve(realpathSync(this.dataDir), relative(this.dataDir, root)) : allowed;
+      if (relative(expected, allowed) || !within(realpathSync(path), allowed)) return '图片链接指向公共素材目录之外，不能读取。';
+    } catch { return '图片不存在或无法读取，请先查询人设图或公共素材的有效路径。'; }
+    return undefined;
+  }
+  private denialFor(agent: unknown, name: string, args?: unknown): string | undefined {
     const request = this.requests.get(agentId(agent));
-    if (name === 'zeta_life_plan_next' && !this.isLifeAgent(agent)) return '只有自主生活会话可以规划下一次活动';
-    const authority = request?.authority;
+    const life = this.isLifeAgent(agent);
+    if (name === 'zeta_life_plan_next' && !life) return '只有自主生活会话可以规划下一次活动';
+    if (life && !this.state.settings.life.enabled) return '自主生活已关闭，请先在管理页开启。';
+    const authority = life ? undefined : request?.authority;
     const current = authority?.administrator && (!authority.senderId || !this.isAdministrator(authority.senderId)) ? { ...authority, administrator: false } : authority;
-    return toolDenial(name, current, request?.group ? request.decision : undefined);
+    const denial = toolDenial(name, current, !life && request?.group ? request.decision : undefined, life ? 'life' : 'qq');
+    return denial ?? (life && name === 'read_image' ? this.lifeImageDenial(args) : undefined);
   }
   decideGroup(agent: unknown, decision: 'reply' | 'skip'): { decision: 'reply' | 'skip'; sendsMessage: false } {
     const request = this.requests.get(agentId(agent));
@@ -382,7 +406,7 @@ export class ZetaRuntime implements ModuleHost {
     if (typeof ctx.tools.guard !== 'function') throw new Error('当前DSH缺少工具安全guard，请升级到支持guard的目标版本');
     ctx.tools.guard(exec => {
       if (!this.isLifeAgent(exec.agent) && !this.bindingFor(exec.agent)) return undefined;
-      return this.denialFor(exec.agent, exec.name);
+      return this.denialFor(exec.agent, exec.name, exec.arguments);
     });
     ctx.on('tools/execute', (exec, next) => this.calls.run({ id: String(exec.callId), name: exec.name }, next), { global: true });
     ctx.on('agent/pre-step', async (payload, next) => {

@@ -68,6 +68,9 @@ const home = join(output, 'home');
 const workspace = join(output, 'workspace');
 await mkdir(home); await mkdir(workspace);
 const environment = { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1', DSH_TOOLS_MODE: 'native', DSH_PERMISSION_MODE: 'workspace-write' };
+// Real native Web tools use only the probe's offline providers in this home.
+environment.DSH_WEB_SEARCH_PROVIDER = 'zeta-native-life-fixture';
+environment.DSH_WEB_FETCH_PROVIDER = 'zeta-native-life-fixture';
 environment.GIT_TERMINAL_PROMPT = '0';
 environment.GCM_INTERACTIVE = 'Never';
 for (const key of Object.keys(environment)) {
@@ -176,6 +179,7 @@ for (const phase of legacyPackage ? [0, 1, 2] : [1, 2]) {
     { id: 'session-telemetry-otel', disabled: true },
     { id: 'agent-default-model', config: { provider: 'zeta-host-fixture', model: 'fixture' } },
     { id: 'tools', config: { mode: 'native' } },
+    { id: 'web', config: { searchProvider: 'zeta-native-life-fixture', fetchProvider: 'zeta-native-life-fixture' } },
     { id: 'webserver', config: { host: '127.0.0.1', port, compression: 'none' } },
     { id: 'web-runtime', config: { openBrowser: false, printUrl: true, surfaceContext: true } },
     { id: 'im-qqbot', config: { appId: 'zeta-fixture', appSecret: 'unused-local-fixture', zeta: { connectQQ: false, dataDir: join(output, 'media') } } },

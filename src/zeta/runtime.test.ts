@@ -12,7 +12,7 @@ describe('trustworthy routes and autonomous contact rules', () => {
     let guard!: (execution: { agent: unknown; name: string }) => string | undefined;
     const ctx = Object.assign(testDomainContext(), { on: () => {}, effect: () => {}, tools: { register: () => {}, guard: (fn: typeof guard) => { guard = fn; return () => {}; } }, systemPrompt: { section: () => {}, context: () => {} } }) as unknown as Context;
     const state = await ZetaState.open(ctx);
-    const settings = state.settings; settings.security.administrators = ['owner']; await state.setSettings(settings);
+    const settings = state.settings; settings.security.administrators = ['owner']; settings.life.enabled = true; await state.setSettings(settings);
     await state.bind({ key: 'qq:bot:c2c:owner', appId: 'bot', scope: 'c2c', peerId: 'owner', sessionId: 's' });
     await state.updateLife(current => ({ ...current, sessionId: 'life' }));
     const runtime = new ZetaRuntime(ctx, state, 'bot'); runtime.install(); const agent = { id: 's' };

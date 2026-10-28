@@ -13,5 +13,5 @@ export interface RequestAuthority {
 export declare function requestAuthority(appId: string, sources: readonly RequestSource[], administrators: readonly string[]): RequestAuthority;
 /** Keep ordinary group chat batched while giving each administrator their own request. */
 export declare function splitRequestBatches<T>(items: readonly T[], senderFor: (item: T) => string, isAdministrator: (senderId: string) => boolean): T[][];
-export declare function toolDenial(name: string, authority: RequestAuthority | undefined, groupDecision?: 'undecided' | 'reply' | 'skip'): string | undefined;
+export declare function toolDenial(name: string, authority: RequestAuthority | undefined, groupDecision?: 'undecided' | 'reply' | 'skip', actor?: 'qq' | 'life'): string | undefined;
 //# sourceMappingURL=permissions.d.ts.map

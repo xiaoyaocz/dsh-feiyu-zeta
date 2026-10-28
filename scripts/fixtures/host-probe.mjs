@@ -2,11 +2,12 @@
 import assert from 'node:assert/strict';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
+import { deflateSync } from 'node:zlib';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 
 export const name = 'zeta-host-verification';
-export const inject = ['projectZeta', 'llm', 'tools', 'storageDomain', 'schedule', 'sessionController', 'agentDefaultModel', 'webServer', 'sessions', 'agents', 'agentPresets', 'connection'];
+export const inject = ['projectZeta', 'llm', 'tools', 'storageDomain', 'schedule', 'sessionController', 'agentDefaultModel', 'webServer', 'sessions', 'agents', 'agentPresets', 'connection', 'web'];
 
 export async function apply(ctx, config) {
   const { LlmAdapter, createUserMessage } = await import(pathToFileURL(join(config.moduleRoot, 'dsh-llm/lib/index.js')).href);
@@ -21,6 +22,11 @@ export async function apply(ctx, config) {
   let manager;
   let cookie;
   let apiPath = '/zeta/api';
+  let nativeExploration = false;
+  let nativePersonaPath;
+  const nativeWebProvider = 'zeta-native-life-fixture';
+  const nativeWebCalls = { search: 0, fetch: 0 };
+  const nativeWebDisposers = [];
   const fakeDeliveries = [];
   const fixtureTarget = 'group:fixture-group';
   const administrator = 'zeta-fixture-administrator';
@@ -42,7 +48,8 @@ export async function apply(ctx, config) {
     }
   }
   class LocalFixture extends LlmAdapter {
-    async listModels(provider) { return [{ provider, id: 'fixture', name: 'Local verification fixture' }, { provider, id: 'fixture-2', name: 'Local verification fixture 2' }]; }
+    async listModels(provider) { return [{ provider, id: 'fixture', name: 'Local verification fixture', inputModalities: ['text', 'image'] }, { provider, id: 'fixture-2', name: 'Local verification fixture 2', inputModalities: ['text', 'image'] }]; }
+    async resolveModel(provider, model, signal) { signal?.throwIfAborted(); return { ...await super.resolveModel(provider, model, signal), inputModalities: ['text', 'image'] }; }
     async *stream(options) {
       options.signal?.throwIfAborted();
       if (++modelCalls > 20) throw new Error('Fixture request limit exceeded');
@@ -109,6 +116,70 @@ export async function apply(ctx, config) {
     const result = await ctx.tools.execute({ callId: `fixture_${randomUUID()}`, name, arguments: args, agent, signal: AbortSignal.timeout(15000) });
     assertCheck(result.isError === true && fakeDeliveries.length === before, description);
   }
+  function installNativeWebFixtures() {
+    // Read only the native provider-selection configuration; never replace a
+    // tool definition or mutate the registry's existing providers.
+    const selected = kind => ctx.web.config[`${kind}Provider`].get() ?? process.env[`DSH_WEB_${kind.toUpperCase()}_PROVIDER`];
+    assert.equal(selected('search'), nativeWebProvider, 'Isolated Host must select the offline search provider before any web tool runs');
+    assert.equal(selected('fetch'), nativeWebProvider, 'Isolated Host must select the offline fetch provider before any web tool runs');
+    nativeWebDisposers.push(ctx.web.registerSearchProvider({ id: nativeWebProvider, available: () => true, async search(input, signal) {
+      signal?.throwIfAborted(); nativeWebCalls.search++;
+      assert.equal(input.query, 'native life offline search');
+      return { content: 'native-offline-search-marker', sources: [{ url: 'https://example.test/native-life', title: 'Offline source', snippet: 'Native provider fixture' }], truncated: false };
+    } }));
+    nativeWebDisposers.push(ctx.web.registerFetchProvider({ id: nativeWebProvider, available: () => true, async fetch(input, signal) {
+      signal?.throwIfAborted(); nativeWebCalls.fetch++;
+      assert.equal(input.url, 'https://example.test/native-life');
+      return { url: input.url, statusCode: 200, body: { kind: 'text', content: 'native-offline-fetch-marker' }, truncated: false };
+    } }));
+  }
+  function onePixelPng() {
+    const chunk = (name, data) => {
+      const type = Buffer.from(name), size = Buffer.alloc(4), checksum = Buffer.alloc(4); size.writeUInt32BE(data.length);
+      let crc = 0xffffffff;
+      for (const byte of Buffer.concat([type, data])) { crc ^= byte; for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0); }
+      checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0); return Buffer.concat([size, type, data, checksum]);
+    };
+    const header = Buffer.alloc(13); header.writeUInt32BE(1, 0); header.writeUInt32BE(1, 4); header[8] = 8; header[9] = 6;
+    return Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', header), chunk('IDAT', deflateSync(Buffer.from([0, 63, 127, 255, 255]))), chunk('IEND', Buffer.alloc(0))]);
+  }
+  async function verifyNativeLifeExploration(lifeAgent, ordinaryAgent) {
+    for (const name of ['read_image', 'web_search', 'web_fetch', 'write']) assertCheck(!!ctx.tools.get(name, lifeAgent), `Native Host provides the real ${name} definition`);
+    const png = onePixelPng();
+    await request('/persona', 'POST', { fileName: 'native-life-fixture.png', base64: png.toString('base64'), description: 'A local one-pixel verification persona; no external image generation.' });
+    const persona = await execute(lifeAgent, 'zeta_persona_reference', {});
+    nativePersonaPath = persona.reference.filePath;
+    const route = lifeAgent.session.requestHeader()?.config;
+    const modelInfo = await ctx.llm.resolveModelInfo(route?.provider ?? lifeAgent.options.provider, route?.model ?? lifeAgent.options.model, AbortSignal.timeout(15000));
+    assertCheck(modelInfo.inputModalities?.includes('image'), 'Offline adapter declares image input for the exact native life model route, independently of the advisory catalog');
+    const image = await ctx.tools.execute({ callId: `fixture_${randomUUID()}`, name: 'read_image', arguments: { file_path: nativePersonaPath }, agent: lifeAgent, signal: AbortSignal.timeout(15000) });
+    const summary = { isError: image.isError, ...(image.error ? { error: image.error } : {}), valueKeys: Object.keys(image.value ?? {}), imageKeys: Object.keys(image.value?.image ?? {}), width: image.value?.image?.width, height: image.value?.image?.height,
+      content: image.content.map(block => ({ type: block.type, keys: Object.keys(block), ...(block.type === 'text' ? { text: block.text.slice(0, 1000).replace(/data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/gu, '[redacted image data]') } : {}), ...(block.type === 'image' ? { attachmentKeys: Object.keys(block.attachment ?? {}), width: block.attachment?.width, height: block.attachment?.height, hasAttachmentId: typeof block.attachment?.attachmentId === 'string' } : {}) })) };
+    debug = { nativeReadImage: summary };
+    assertCheck(image.isError === false, `Native read_image completes successfully: ${JSON.stringify(summary)}`);
+    assertCheck(image.value.image.width === 1 && image.value.image.height === 1, 'Native read_image returns the exact one-pixel persona dimensions');
+    assertCheck(image.content.some(block => block.type === 'image' && block.attachment?.attachmentId), 'Native read_image projects the durable reference into the standard image attachment block');
+    assert.deepEqual(await readFile(nativePersonaPath), png);
+    const search = await execute(lifeAgent, 'web_search', { queries: ['native life offline search'] });
+    const fetched = await execute(lifeAgent, 'web_fetch', { url: 'https://example.test/native-life' });
+    assertCheck(search.content === 'native-offline-search-marker' && search.sources.length === 1 && nativeWebCalls.search === 1, 'Enabled life native web_search reaches exactly one offline registered search provider');
+    assertCheck(fetched.body.content === 'native-offline-fetch-marker' && nativeWebCalls.fetch === 1, 'Enabled life native web_fetch reaches exactly one offline registered fetch provider');
+    const outsideImage = join(config.workspace, 'outside-public-persona.png'); await writeFile(outsideImage, png);
+    await rejectsTool(lifeAgent, 'read_image', { file_path: outsideImage }, 'Life cannot read a valid native image outside its public material roots');
+    await rejectsTool(lifeAgent, 'read_image', { file_path: 'data:image/png;base64,' + png.toString('base64') }, 'Life native image grant cannot be bypassed with an image data URL');
+    await rejectsTool(lifeAgent, 'read_image', { file_path: 'file://' + nativePersonaPath.replaceAll('\\', '/') }, 'Life native image grant cannot be bypassed with a file URL');
+    await rejectsTool(lifeAgent, 'read_image', { file_path: 'native-life-fixture.png' }, 'Life native image grant requires an explicit absolute material path');
+    for (const [name, args] of [['read_image', { file_path: nativePersonaPath }], ['web_search', { queries: ['native life offline search'] }], ['web_fetch', { url: 'https://example.test/native-life' }]]) {
+      await rejectsTool(ordinaryAgent, name, args, `Ordinary QQ identity does not inherit the life-only native ${name} grant`);
+    }
+    assertCheck(nativeWebCalls.search === 1 && nativeWebCalls.fetch === 1, 'Denied ordinary QQ web tools never reach either provider body');
+    const forbiddenWrite = join(config.workspace, 'life-must-not-write.txt');
+    runtime.beginRequest(lifeAgent, [{ senderId: administrator, messageId: `fixture_${randomUUID()}`, text: 'Administrator-shaped metadata must not grant the life agent sensitive authority.' }], false);
+    try { await rejectsTool(lifeAgent, 'write', { file_path: forbiddenWrite, content: 'must not be written' }, 'Life native exploration does not inherit an administrator-shaped request or gain native file writes'); }
+    finally { runtime.endRequest(lifeAgent); }
+    let wrote = false; try { await access(forbiddenWrite); wrote = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    assertCheck(!wrote, 'Denied life native file-write body leaves no host file');
+  }
   function attachFakeGateway() {
     runtime.attachGateway({ manager,
       sender: { async sendMarkdown(target, text) { fakeDeliveries.push({ target, text }); return { id: `fixture-receipt-${fakeDeliveries.length}` }; }, openStream() { throw new Error('Fixture must not stream QQ messages'); } },
@@ -135,6 +206,9 @@ export async function apply(ctx, config) {
   async function run() {
     try {
       const pluginManifest = JSON.parse(await readFile(join(config.pluginRoot, 'package.json'), 'utf8'));
+      const version = pluginManifest.version.split(/[.-]/u).slice(0, 3).map(Number);
+      nativeExploration = version[0] > 0 || version[1] > 4 || (version[1] === 4 && version[2] >= 6);
+      if (nativeExploration) installNativeWebFixtures();
       if (pluginManifest.name === 'dsh-feiyu-zeta') {
         assertCheck(pluginManifest.repository?.url === 'git+https://github.com/xiaoyaocz/dsh-feiyu-zeta.git', 'Installed plugin declares its own repository');
         for (const locale of ['zh', 'en']) {
@@ -356,6 +430,7 @@ export async function apply(ctx, config) {
         assertCheck(runtime.state.identity.history.at(-1).sourceSessionId === lifeAgent.id && runtime.state.identity.history.at(-1).reason === lifeIdentityReason, 'Autonomous native identity change retains the real life Session and adjustment reason');
         await rejectsTool(lifeAgent, 'zeta_settings_update', { changes: { life: { allowContact: true } } }, 'Self-directed life identity evolution does not grant sensitive feature configuration');
         await rejectsTool(lifeAgent, 'zeta_host_probe_echo', { text: 'must remain denied' }, 'Self-directed life identity evolution does not grant an unlisted host tool');
+        if (nativeExploration) await verifyNativeLifeExploration(lifeAgent, aliceNew);
         await request('/settings', 'PUT', runtime.state.settings);
         const planned = runtime.state.life;
         const plannedSchedules = await ctx.schedule.list({ sessionId: life.sessionId });
@@ -378,7 +453,7 @@ export async function apply(ctx, config) {
         for (const conversation of runtime.state.conversations('zeta-fixture').filter(record => record.scope === 'c2c')) {
           await runtime.state.observeUser({ appId: conversation.appId, senderId: conversation.peerId, scope: 'c2c', peerId: conversation.peerId, seenAt: Math.max(Date.now(), conversation.lastSeenAt) });
         }
-        await writeFile(config.stateFile, JSON.stringify({ aliceSessionId: aliceNew.id, qqSessionId: qq.sessionId, groupSessionId: group.sessionId, lifeSessionId: life.sessionId, identitySessionId: identityAgent.id, identity: runtime.state.identity, users: runtime.state.users(), imageIds: (await request('/images')).items.map(item => item.id).sort(), scheduleId: planned.scheduleId, nextWakeAt: planned.nextWakeAt }), 'utf8');
+        await writeFile(config.stateFile, JSON.stringify({ aliceSessionId: aliceNew.id, qqSessionId: qq.sessionId, groupSessionId: group.sessionId, lifeSessionId: life.sessionId, identitySessionId: identityAgent.id, identity: runtime.state.identity, users: runtime.state.users(), imageIds: (await request('/images')).items.map(item => item.id).sort(), scheduleId: planned.scheduleId, nextWakeAt: planned.nextWakeAt, ...(nativePersonaPath ? { nativePersonaPath } : {}) }), 'utf8');
       } else {
         const saved = JSON.parse(await readFile(config.stateFile, 'utf8'));
         assert.deepEqual(runtime.state.users(), saved.users, 'After Host restart observed QQ users retain their original identities, metadata and last-seen timestamps');
@@ -402,15 +477,22 @@ export async function apply(ctx, config) {
         await request('/life/stop', 'POST', {});
         assertCheck(!(await ctx.schedule.list({ sessionId: saved.lifeSessionId })).some(record => record.id === saved.scheduleId), 'Explicit stop removes the native schedule');
         assertCheck(runtime.state.life.sessionId === saved.lifeSessionId && !runtime.state.settings.life.enabled, 'Explicit stop preserves Session and memory with life disabled');
+        if (nativeExploration) {
+          const stoppedLife = await resolve(saved.lifeSessionId);
+          for (const [name, args] of [['read_image', { file_path: saved.nativePersonaPath }], ['web_search', { queries: ['native life offline search'] }], ['web_fetch', { url: 'https://example.test/native-life' }]]) {
+            await rejectsTool(stoppedLife, name, args, `Explicit stop immediately withdraws the native life ${name} grant`);
+          }
+          assertCheck(nativeWebCalls.search === 0 && nativeWebCalls.fetch === 0 && modelCalls === 0, 'Stopped native life tools reach neither offline provider nor a model');
+        }
         await execute(alice, 'zeta_memory_delete', { key: 'fixture-preference' });
         assertCheck((await execute(alice, 'zeta_memory_get', { key: 'fixture-preference' })).length === 0, 'Native memory delete persists only the requested public record removal');
       }
-      await writeFile(config.resultFile, JSON.stringify({ ok: true, phase: config.phase, checks, modelCalls, echoCalls }, null, 2), 'utf8');
+      await writeFile(config.resultFile, JSON.stringify({ ok: true, phase: config.phase, checks, modelCalls, echoCalls, ...(nativeExploration ? { nativeWebCalls } : {}) }, null, 2), 'utf8');
     } catch (error) {
       await writeFile(config.resultFile, JSON.stringify({ ok: false, phase: config.phase, checks, modelCalls, echoCalls, error: String(error?.stack || error), debug }, null, 2), 'utf8');
     }
   }
   // A one-shot test fixture waits until the ordinary Web startup has mounted routes.
   const timer = setTimeout(() => { task = run(); }, 1200);
-  ctx.effect(() => async () => { clearTimeout(timer); await task; await manager?.disposeAll(); unregisterTool(); unregisterAdapter(); }, 'zeta.host-verification');
+  ctx.effect(() => async () => { clearTimeout(timer); await task; await manager?.disposeAll(); for (const dispose of nativeWebDisposers.reverse()) dispose(); unregisterTool(); unregisterAdapter(); }, 'zeta.host-verification');
 }

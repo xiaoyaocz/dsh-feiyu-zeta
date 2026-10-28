@@ -63,6 +63,7 @@ export declare class ZetaRuntime implements ModuleHost {
     authorityFor(agent: unknown): RequestAuthority | undefined;
     isAdministrator(senderId: string): boolean;
     canApprove(agent: unknown, senderId?: string): boolean;
+    private lifeImageDenial;
     private denialFor;
     decideGroup(agent: unknown, decision: 'reply' | 'skip'): {
         decision: 'reply' | 'skip';

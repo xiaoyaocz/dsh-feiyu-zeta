@@ -1,6 +1,6 @@
 {
   "name": "dsh-feiyu-zeta",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "icon": "./assets/icons/qq_logo.svg",
   "description": "dsh-feiyu-zeta：个人测试自用的 DeepSeek Harness QQ 陪伴插件，集成人设与习惯演变、记忆、共享表情、语音、自主活动和云端创作工具。",
   "type": "module",
