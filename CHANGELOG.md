@@ -4,7 +4,15 @@
 
 本文件记录这个个人测试、自用实验项目的变化。原样继承的 dsh-qqbot 上游更新记录已移除，避免把上游版本号、功能发布和支持渠道误认为本项目承诺；来源与许可证保留在 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
-## 0.4.3（当前）
+## 0.4.4（当前）
+
+- 支持在 DSH 插件安装来源直接输入 `github:xiaoyaocz/dsh-feiyu-zeta` 或完整 GitHub HTTPS 地址，无需本地克隆。
+- `main` 提交完整预构建 `dist/`、`lib/`，不依赖安装生命周期现场编译；开发构建保留，CI 检查源码与已提交产物一致。
+- Windows 安装助手增加 `-Source`，继续通过桌面版官方入口安装到保留的 `desktop` profile；`-Package` 本地归档和 `-WhatIf` 计划预览保留。
+- 宿主要求保持精确的 DSH `0.2.1-rc.3`；仍需 Git 和联网安装运行依赖，不包含 `node_modules`，不发布 npm、市场条目或 GitHub Release。
+- 保留 0.4.3 及更早支持版本的备份恢复兼容；实际验证范围见 [VALIDATION.md](./VALIDATION.md)。
+
+## 0.4.3
 
 - 移除配置页的管理空间选择，记忆、语音、生图和临时网页统一使用公共资料库。
 - 自动合并旧分区记忆与素材，同名冲突分别保留，迁移可重试，保留原文件和任务标识。

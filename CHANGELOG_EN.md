@@ -4,7 +4,15 @@
 
 This file records this personal testing and self-use experiment. The inherited dsh-qqbot changelog is no longer presented as this project's release history; source and copyright notices remain in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
-## 0.4.3 — current
+## 0.4.4 — current
+
+- Accept `github:xiaoyaocz/dsh-feiyu-zeta` or the full GitHub HTTPS URL in DSH's plugin source field, without a local clone.
+- Commit complete prebuilt `dist/` and `lib/` files on `main` instead of compiling during installation. Retain development builds and check source/artifact consistency in CI.
+- Add `-Source` to the Windows helper while keeping the Desktop carrier's official entry point for the reserved `desktop` profile, local `-Package` archives and `-WhatIf` plan previews.
+- Keep the exact DSH `0.2.1-rc.3` requirement. Git and network access for runtime dependencies are still needed; no `node_modules`, npm publication, marketplace entry or GitHub Release is provided.
+- Preserve backup compatibility with 0.4.3 and earlier supported versions. Actual verification scope is recorded in [VALIDATION.md](./VALIDATION.md).
+
+## 0.4.3
 
 - Remove the management-space selector and share memory, speech, generated images and temporary webpage records in one library.
 - Merge older partitions without overwriting conflicts or repeating paid submissions or QQ deliveries; retain original files and task identifiers.

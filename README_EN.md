@@ -4,27 +4,61 @@
 
 A **personal testing and self-use experiment** combining QQ chat, an evolving whale-inspired persona, memory, shared stickers, speech, autonomous activity and optional cloud services in one DeepSeek Harness plugin. It is not an official DeepSeek, Tencent Connect or service-provider product, and it carries no production stability guarantee.
 
-Current version: **0.4.3**. Target: **DeepSeek Harness 0.2.1-rc.3**, **Node.js >=24.9.0**. The former plugin name was `dsh-zeta`; this repository root contains the plugin itself.
+Current version: **0.4.4**. Target: **DeepSeek Harness 0.2.1-rc.3 exactly**, **Node.js >=24.9.0**. The former plugin name was `dsh-zeta`; this repository root contains the plugin itself.
 
-## Build and install locally
+## Install from GitHub
 
-This package is not published to npm. Build and install the local archive:
+In DSH's plugin installation page, enter either source below, install, then reload or restart as prompted:
+
+```text
+github:xiaoyaocz/dsh-feiyu-zeta
+https://github.com/xiaoyaocz/dsh-feiyu-zeta
+```
+
+Use the `github:` prefix or full HTTPS URL; the UI rejects the shorthand without a prefix. No local clone is required. With an existing DSH CLI, install into the `web` profile using:
+
+```sh
+dsh plugin --profile web add github:xiaoyaocz/dsh-feiyu-zeta
+```
+
+The default source follows the repository's default branch. Append `#main` to name the branch explicitly, or use `github:xiaoyaocz/dsh-feiyu-zeta#<full-40-character-commit-SHA>` to pin a build. Replace that placeholder with a real commit before use.
+
+`main` includes the complete prebuilt `dist/` and `lib/` files. Installation loads them directly and does not compile through `prepare`, `install` or `postinstall`. **Git and network access** are still required to fetch the repository and runtime dependencies; `node_modules` is not included. This package is not published to npm and has no marketplace entry or GitHub Release. On first use, configure a conversation model and bind QQ; existing bindings or environment credentials retain their connection behavior. Paid features are disabled by default and must be enabled separately.
+
+## Windows Desktop helper
+
+If you already have a local copy of this repository, its PowerShell 7 helper can discover the installed Desktop runtime, back up the target profile configuration and use the Desktop carrier's official installation entry point:
+
+```powershell
+.\scripts\install-local.ps1 -InspectOnly
+.\scripts\install-local.ps1 -Source 'github:xiaoyaocz/dsh-feiyu-zeta' -Profile desktop -WhatIf
+.\scripts\install-local.ps1 -Source 'github:xiaoyaocz/dsh-feiyu-zeta' -Profile desktop
+```
+
+`-WhatIf` only shows the plan and does not modify the daily profile. Without `-Profile`, the helper defaults to the isolated `zeta-test` profile. DSH rc.3 reserves the `desktop` profile: use the DSH UI or this helper rather than a normal CLI installation targeting it. The helper leaves restarting the app to you. Use `-DesktopExe 'full path to DeepSeek Harness.exe'` for a nonstandard installation location.
+
+Do not enable this plugin alongside the old `dsh-zeta` package or the original `@tencent-connect/dsh-qqbot` in the same profile.
+
+## Local development and archive installation
+
+For source changes or a local archive, run from this repository root:
 
 ```powershell
 npm ci
 npm run check
 npm test
 npm run build
+npm run check:distribution
 npm pack
 
-.\scripts\install-local.ps1 -InspectOnly
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.3.tgz -WhatIf
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.3.tgz
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz -WhatIf
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz -Profile desktop
 ```
 
-The Windows script discovers the installed Desktop runtime and defaults to an isolated `zeta-test` profile. For the everyday Desktop profile, explicitly add `-Profile desktop`. It backs up the target profile configuration and leaves restarting the app to you. Do not enable this plugin alongside the old `dsh-zeta` package or the original `@tencent-connect/dsh-qqbot` in the same profile.
-
 The local `install.sh` helper supports an already installed DSH CLI. It accepts a local archive through `--package` and defaults to the `web` profile; see `./install.sh --help`.
+
+Keep using `npm run build` during development and commit regenerated `dist/` and `lib/` files with source changes. CI rebuilds from clean output directories and checks that committed artifacts match the source, as well as validating runtime files in Git and npm archives. See [VALIDATION.md](./VALIDATION.md) for actual installation and verification results.
 
 ## Configure and use
 
@@ -54,7 +88,7 @@ Self portraits automatically use the uploaded persona image. Unknown paid-reques
 
 The owner panel exports encrypted backups and a code-only plugin archive. Backups cover identity and audit history, the observed QQ-user directory, settings, associated native sessions and attachments, memory, stickers, generated media and native task history. Older backups without a user directory start with an empty directory while retaining saved administrators. Restored QQ, autonomous activity and cloud services stay paused until explicitly re-enabled. Temporary deployment tokens and active browser sessions are not portable permissions.
 
-Compatibility handling exists for 0.3.0, 0.4.0, 0.4.1 and 0.4.2 backups, including former `dsh-zeta` packages. Customized old identities are preserved; only an untouched old built-in identity is replaced. See [the Chinese guide](./README.md) for complete configuration and migration steps, and [VALIDATION.md](./VALIDATION.md) for actual verification scope. Old-name checks do not establish verification of the renamed archive.
+Compatibility handling exists for 0.3.0, 0.4.0, 0.4.1, 0.4.2 and 0.4.3 backups, including former `dsh-zeta` packages. Customized old identities are preserved; only an untouched old built-in identity is replaced. See [the Chinese guide](./README.md) for complete configuration and migration steps, and [VALIDATION.md](./VALIDATION.md) for actual verification scope. Old-name checks do not establish verification of the renamed archive.
 
 ## Sources and attribution
 

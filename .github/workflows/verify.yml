@@ -1,0 +1,54 @@
+name: Verify GitHub distribution
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0, Node 24
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Verify committed distribution without dependencies
+        shell: bash
+        run: |
+          archive_root=$(mktemp -d "$RUNNER_TEMP/zeta-git-XXXXXX")
+          git archive HEAD | tar -x -C "$archive_root"
+          node scripts/check-distribution.mjs --root "$archive_root"
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - run: node --test scripts/check-distribution.test.mjs
+      - name: Rebuild from clean output directories
+        run: |
+          node --input-type=module -e "import { rm } from 'node:fs/promises'; await Promise.all(['dist', 'lib'].map(path => rm(path, { recursive: true, force: true })));"
+          npm run build
+          node scripts/check-distribution.mjs
+      - name: Require committed artifacts to match source
+        shell: bash
+        run: |
+          changes=$(git status --porcelain --untracked-files=all -- dist lib)
+          if [ -n "$changes" ]; then
+            printf '%s\n' "$changes"
+            printf '%s\n' 'Rebuild and commit dist/ and lib/ together with the source changes.' >&2
+            exit 1
+          fi
+      - name: Verify actual npm archive contents
+        shell: bash
+        run: |
+          archive_root=$(mktemp -d "$RUNNER_TEMP/zeta-npm-XXXXXX")
+          npm pack --ignore-scripts --pack-destination "$archive_root"
+          tar -xzf "$archive_root/"*.tgz -C "$archive_root"
+          node scripts/check-distribution.mjs --root "$archive_root/package"

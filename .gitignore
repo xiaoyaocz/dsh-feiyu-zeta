@@ -1,6 +1,5 @@
 node_modules/
-/dist/
-/lib/
+# Runtime artifacts are committed so DSH can install from GitHub without a build.
 /.upstream/
 /.test-home/
 /artifacts/

@@ -1,10 +1,24 @@
 # dsh-feiyu-zeta 验证范围与记录
 
-当前项目：[xiaoyaocz/dsh-feiyu-zeta](https://github.com/xiaoyaocz/dsh-feiyu-zeta)，版本 `0.4.3`。目标宿主为 DeepSeek Harness `0.2.1-rc.3`，Node.js `>=24.9.0`。
+当前项目：[xiaoyaocz/dsh-feiyu-zeta](https://github.com/xiaoyaocz/dsh-feiyu-zeta)，版本 `0.4.4`。目标宿主为 DeepSeek Harness `0.2.1-rc.3`，Node.js `>=24.9.0`。
 
 这是个人测试、自用实验项目。验证用于说明实际检查过的行为，不是生产稳定性承诺。更名前的旧包结果与更名后的新包结果分别记录。
 
-## 0.4.3 公共资料库验证
+## 0.4.4 GitHub 安装适配
+
+仓库直接提交 `dist/`、`lib/` 及原有运行资源，不依赖安装时的编译钩子；保留精确宿主兼容要求。新增分发完整性检查和 GitHub CI，检查干净构建是否与提交的产物一致。
+
+本轮类型检查、507 项单元与协议测试、11 项分发检查器测试通过；干净构建产物检查覆盖 129 个文件、92 个 JavaScript 文件、156 条相对依赖和 SQLite 索引中的 24 张内置表情。实际 npm 归档解压后可在无 `node_modules` 的目录运行分发检查器。Windows 安装助手的 GitHub 来源及桌面 profile 计划已用 `-WhatIf` 检查，未修改日常配置。
+
+本地预验证使用官方 DSH rc.3 / pnpm 11 的 `git+file` 固定提交来源，在全离线、独立 profile 中完成安装、首次运行及重启。0.4.3 代码与预构建分发方案的基线通过 132 项检查，未触发安装脚本或构建审批，结果位于 `output/host-git-local-0.4.3-final/summary.json`。正式 0.4.4 GitHub 来源的固定提交验证在发布后补录；该基线不等同于正式远程验证。
+
+可复跑正式 GitHub 验证：
+
+```sh
+node scripts/verify-host.mjs --spec github:xiaoyaocz/dsh-feiyu-zeta#<完整40位提交SHA> --expected-version 0.4.4 --output ./output/host-github-0.4.4
+```
+
+## 0.4.3 公共资料库验证（历史）
 
 本轮移除管理空间选择，所有聊天和自主生活共用公共记忆、语音、图片、网页与表情资料。以下针对新构建的 `dsh-feiyu-zeta-0.4.3.tgz`：
 

@@ -243,7 +243,7 @@ export class BackupService {
       const conflicts = await this.freshConflicts(manifest.id, manifestDigest); const warnings = [...manifest.warnings];
       try { await preflightConfiguration(this.ctx, config, signal); }
       catch { conflicts.push('目标的模型配置、QQ入口或连接凭据存在冲突，请先在DSH设置中处理后重新校验'); }
-      if (![PLUGIN_VERSION, '0.4.2', '0.4.1', '0.4.0', '0.3.0'].includes(manifest.pluginVersion)) conflicts.push(`迁移包使用插件${manifest.pluginVersion}，请先安装同版本插件后恢复`);
+      if (![PLUGIN_VERSION, '0.4.3', '0.4.2', '0.4.1', '0.4.0', '0.3.0'].includes(manifest.pluginVersion)) conflicts.push(`迁移包使用插件${manifest.pluginVersion}，请先安装同版本插件后恢复`);
       for (const preset of manifest.presets) {
         try { if (preset.digest && hash((await this.ctx.agentPresets.readDocument(preset.id)).content) !== preset.digest) conflicts.push(`Agent预设${preset.id}与源电脑不同，请先安装相同预设及所需DSH插件`); else if (preset.missing) warnings.push(`源电脑缺少预设${preset.id}声明，将使用目标电脑已安装的同名预设`); }
         catch { conflicts.push(`目标电脑缺少Agent预设${preset.id}，请先安装对应DSH插件和预设`); }

@@ -104,7 +104,7 @@ async function fixture(version: string, inputs: Record<string, Buffer>) {
   return { directory, state, privateService, preview, expectedIdentity, expectedUsers };
 }
 describe('0.4 backup upgrade and new material boundaries', () => {
-  it.each(['0.3.0', '0.4.0', '0.4.1', '0.4.2'])('previews and restores an encrypted %s archive with additive defaults and no automatic external activity', async version => {
+  it.each(['0.3.0', '0.4.0', '0.4.1', '0.4.2', '0.4.3'])('previews and restores an encrypted %s archive with additive defaults and no automatic external activity', async version => {
     const files = { 'data/memes/old-library/image.gif': Buffer.from('legacy exact gif bytes') };
     const f = await fixture(version, files), stage = await f.preview();
     expect(stage.preview.canRestore).toBe(true);
@@ -115,7 +115,7 @@ describe('0.4 backup upgrade and new material boundaries', () => {
     expect(f.state.settings.life.enabled).toBe(false); expect(f.state.settings.life.allowContact).toBe(false);
     expect(f.state.settings.browser.enabled).toBe(false); expect(f.state.settings.images.enabled).toBe(false); expect(f.state.settings.deployments.enabled).toBe(false);
     expect(f.state.settings.security.administrators).toEqual(version === '0.3.0' ? [] : ['trusted-owner-id']);
-    expect(f.state.users()).toEqual(version === '0.4.2' ? f.expectedUsers : []);
+    expect(f.state.users()).toEqual(['0.4.2', '0.4.3'].includes(version) ? f.expectedUsers : []);
     if (version === '0.4.2') {
       const memories = f.state.listMemory('any-legacy-space');
       expect(memories.map(entry => entry.value).sort()).toEqual(['来自私聊的事实', '来自群聊的另一事实'].sort());

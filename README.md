@@ -4,43 +4,71 @@
 
 dsh-feiyu-zeta 将 QQ 接入、人设与形象图、长期记忆、共享表情、语音、自主活动、云浏览器、临时网页和生图集成在一个 DSH 插件中。对话模型、会话、工具执行、凭据及自动任务沿用 DeepSeek Harness。
 
-当前版本 **0.4.3**，适配 **DSH 0.2.1-rc.3**、Node.js **>=24.9.0**。插件原名 `dsh-zeta`；代码与数据独立于旧 ProjectZeta 主工程，不会读取旧主工程数据库。0.3.0 / 0.4.0 / 0.4.1 / 0.4.2 数据及加密备份有升级兼容处理；实际安装、迁移验证范围见 [VALIDATION.md](./VALIDATION.md)。
+当前版本 **0.4.4**，仅适配 **DSH 0.2.1-rc.3**，Node.js 要求 **>=24.9.0**。插件原名 `dsh-zeta`；代码与数据独立于旧 ProjectZeta 主工程，不会读取旧主工程数据库。0.3.0 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 数据及加密备份有升级兼容处理；实际安装、迁移验证范围见 [VALIDATION.md](./VALIDATION.md)。
 
 ## 安装与升级
 
-先在 DSH 选择可用的默认对话模型。本项目尚未发布到 npm，安装使用本地构建的归档；仓库根目录就是插件目录。在本目录构建：
+### 直接从 GitHub 安装
+
+在 DSH 的插件安装页面，将以下任意一项填入**安装来源**，按页面提示安装后重新加载或重启：
+
+```text
+github:xiaoyaocz/dsh-feiyu-zeta
+https://github.com/xiaoyaocz/dsh-feiyu-zeta
+```
+
+请使用带 `github:` 前缀或完整 HTTPS 地址的来源，界面不接受省略前缀的写法。正常安装无需克隆仓库。已有 DSH CLI 的 `web` profile 也可执行：
+
+```sh
+dsh plugin --profile web add github:xiaoyaocz/dsh-feiyu-zeta
+```
+
+默认安装仓库的默认分支；也可在来源末尾添加 `#main`。要固定到某次构建，使用 `github:xiaoyaocz/dsh-feiyu-zeta#<完整40位提交SHA>`，将占位符替换为真实提交，不要原样输入。
+
+`main` 已包含完整预构建的 `dist/` 和 `lib/`，安装时直接加载，不依赖 `prepare`、`install` 或 `postinstall` 编译。安装环境仍需 **Git**，并能联网下载 GitHub 内容和运行依赖；仓库不包含 `node_modules`。本项目未发布到 npm，也未提供插件市场条目或 GitHub Release。首次使用需配置模型并绑定 QQ；已有绑定或环境变量时沿用原连接配置。收费功能默认关闭，需分别启用所需服务。
+
+### Windows 桌面版安装助手
+
+已有本仓库的本地副本时，也可使用 PowerShell 7 运行安装助手。它发现桌面版自带的 DSH，先备份目标 profile 配置，再调用桌面版官方安装入口。先查看计划，再安装到日常桌面 profile：
+
+```powershell
+.\scripts\install-local.ps1 -InspectOnly
+.\scripts\install-local.ps1 -Source 'github:xiaoyaocz/dsh-feiyu-zeta' -Profile desktop -WhatIf
+.\scripts\install-local.ps1 -Source 'github:xiaoyaocz/dsh-feiyu-zeta' -Profile desktop
+```
+
+`-WhatIf` 只显示计划，不修改日常 profile；不传 `-Profile` 时默认使用独立测试 profile `zeta-test`。DSH rc.3 的 `desktop` 是保留 profile，普通 CLI 不能直接安装到它，请使用 DSH 界面或此助手。脚本不会替你重启桌面版。其他安装位置可用 `-DesktopExe '完整的 DeepSeek Harness.exe 路径'`。
+
+本包已包含 QQBot 接入代码，同一 profile 不要同时启用旧名 `dsh-zeta` 或原版 `@tencent-connect/dsh-qqbot`，以免重复加载 QQ 网关。
+
+### 本地开发与归档安装
+
+仓库根目录就是插件目录。需要修改源码或构建本地归档时，在本目录运行：
 
 ```powershell
 npm ci
 npm run check
 npm test
 npm run build
+npm run check:distribution
 npm pack
 ```
 
-打包得到 `dsh-feiyu-zeta-0.4.3.tgz`。使用包内安装脚本发现桌面版自带的 DSH 运行环境：
+打包得到 `dsh-feiyu-zeta-0.4.4.tgz`。安装助手仍支持本地包：
 
 ```powershell
-.\scripts\install-local.ps1 -InspectOnly
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.3.tgz -WhatIf
-.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.3.tgz
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz -WhatIf
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz
+.\scripts\install-local.ps1 -Package .\dsh-feiyu-zeta-0.4.4.tgz -Profile desktop
 ```
 
-默认安装到独立测试 profile `zeta-test`。日常桌面版需明确指定：
-
-```powershell
-.\scripts\install-local.ps1 -Profile desktop -Package .\dsh-feiyu-zeta-0.4.3.tgz
-```
-
-脚本先备份目标 profile 配置，不会替你重启桌面版。安装后按 DSH 提示重新加载或重启。其他安装位置可用 `-DesktopExe '完整的 DeepSeek Harness.exe 路径'`。本包已包含 QQBot 接入代码，同一 profile 不要同时启用旧名 `dsh-zeta` 或原版 `@tencent-connect/dsh-qqbot`，以免重复加载 QQ 网关。
-
-其他平台已有 DSH CLI 时，可使用本仓库的本地安装脚本，默认安装到 `web` profile：
+其他平台已有 DSH CLI 时，可使用本仓库的本地归档安装脚本，默认安装到 `web` profile：
 
 ```sh
-./install.sh --package ./dsh-feiyu-zeta-0.4.3.tgz
+./install.sh --package ./dsh-feiyu-zeta-0.4.4.tgz
 ```
 
-可用参数见 `./install.sh --help`；脚本使用已有 DSH，不代为从 npm 安装宿主。
+可用参数见 `./install.sh --help`；脚本使用已有 DSH，不代为从 npm 安装宿主。开发时保留 `npm run build`；源码变更应连同重新生成的 `dist/`、`lib/` 一起提交。CI 会从干净目录重建并检查已提交产物与源码一致，也会核对 Git 和 npm 归档中的完整运行文件。
 
 升级保留已定制的名称、人设、记忆、绑定及素材；只有旧内置身份完全未修改时，才替换成新的“小鲸鱼”默认预设。旧版各聊天的记忆、语音、生成图片、网页记录和截图会自动合并到公共资料库，同名不同内容分别保留，原始素材不删除；表情在首次访问图库时继续合并。旧固定周期自主任务在开启后由新的一次性计划替换。首次启用三个外部服务及管理员权限时，仍需由 DSH 所有者配置。
 
@@ -159,7 +187,7 @@ MiMo / MiniMax 分别保存 `ZETA_MIMO_API_KEY` / `ZETA_MINIMAX_API_KEY`。默�
 
 1. **旧机导出**：设定并确认 8–1024 字符的密码，下载 `.zeta-backup`。可选择是否包含已配置的凭据；不包含时新机需重新填写。密码遗失无法恢复。
 2. **准备新机**：下载纯代码插件包，安装 DSH 0.2.1-rc.3 和本版插件，预装原来使用的其他插件及匹配 Agent 预设。安装包仍需安装依赖。
-3. **先校验再恢复**：上传文件、输入密码，检查摘要和冲突，再恢复到空插件环境。支持本版及 0.3.0 / 0.4.0 / 0.4.1 备份；不会覆盖已有聊天、素材或冲突凭据。中断后可用同一文件校验继续。
+3. **先校验再恢复**：上传文件、输入密码，检查摘要和冲突，再恢复到空插件环境。支持本版及 0.3.0 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 备份；不会覆盖已有聊天、素材或冲突凭据。中断后可用同一文件校验继续。
 4. **重启与启用**：恢复后重启 DSH，停掉旧机 QQ 连接，再点击“启用迁移后的QQ连接”。自主活动、主动联系及三个新外部服务保持关闭，核对数据与密钥后分别手动启用。
 
 桌面版 `desktop` 是保留 profile，请使用包内安装脚本：
@@ -185,18 +213,19 @@ tar -xzf $zetaPackage -C .\dsh-feiyu-zeta-installer
 npm run check
 npm test
 npm run build
+npm run check:distribution
 ```
 
 测试覆盖协议模拟、工具权限、身份演变与版本冲突、群沉默与合并、计划恢复、图库迁移及备份等。模拟测试不会证明真实收费服务可用；真实端到端验证应使用自己的账户、短任务，并核对外部回执。真实宿主验证脚本使用桌面版自带 DSH、独立临时 home 和本地假模型，检查原生工具调用、普通 QQ 与自主活动的身份修改、权限边界及重启持久化；不会读取日常 profile：
 
 ```powershell
-node scripts/verify-host.mjs --package .\dsh-feiyu-zeta-0.4.3.tgz
+node scripts/verify-host.mjs --package .\dsh-feiyu-zeta-0.4.4.tgz
 ```
 
 双机迁移脚本另建两个独立临时 DSH home，检查身份、审计记录与原生会话等内容的加密备份及恢复：
 
 ```powershell
-node scripts/verify-backup-host.mjs --package .\dsh-feiyu-zeta-0.4.3.tgz
+node scripts/verify-backup-host.mjs --package .\dsh-feiyu-zeta-0.4.4.tgz
 ```
 
 ## 来源与使用范围

@@ -3,6 +3,7 @@ param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$')]
     [string]$Profile = 'zeta-test',
     [string]$Package,
+    [string]$Source,
     [string]$DesktopExe,
     [switch]$InspectOnly
 )
@@ -58,19 +59,29 @@ if ($InspectOnly) {
     return
 }
 
-if (-not $Package) {
-    $candidates = foreach ($directory in @($projectRoot, (Join-Path $projectRoot 'release'), (Join-Path $projectRoot 'artifacts'), (Join-Path $projectRoot 'dist'))) {
-        if (Test-Path -LiteralPath $directory -PathType Container) {
-            Get-ChildItem -LiteralPath $directory -File -Filter '*.tgz'
-        }
+if ($Package -and $Source) { throw 'Use either -Package <local.tgz> or -Source <GitHub repository>, not both.' }
+$packagePath = $null
+if ($Source) {
+    if ($Source -notmatch '^(?:github:|(?:git\+)?https://github\.com/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:#[^\s]+)?$') {
+        throw 'Source must be github:owner/repository[#ref] or an HTTPS GitHub repository URL.'
     }
-    $latest = $candidates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-    if (-not $latest) { throw 'No local .tgz package found. Build and pack the plugin, then pass -Package <absolute-path.tgz>.' }
-    $Package = $latest.FullName
-}
-$packagePath = (Resolve-Path -LiteralPath $Package).Path
-if ([IO.Path]::GetExtension($packagePath) -ne '.tgz' -or -not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
-    throw 'Package must name an existing local .tgz file.'
+    $installTarget = $Source
+} else {
+    if (-not $Package) {
+        $candidates = foreach ($directory in @($projectRoot, (Join-Path $projectRoot 'release'), (Join-Path $projectRoot 'artifacts'), (Join-Path $projectRoot 'dist'))) {
+            if (Test-Path -LiteralPath $directory -PathType Container) {
+                Get-ChildItem -LiteralPath $directory -File -Filter '*.tgz'
+            }
+        }
+        $latest = $candidates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+        if (-not $latest) { throw 'No local .tgz package found. Build and pack the plugin, then pass -Package <absolute-path.tgz>.' }
+        $Package = $latest.FullName
+    }
+    $packagePath = (Resolve-Path -LiteralPath $Package).Path
+    if ([IO.Path]::GetExtension($packagePath) -ne '.tgz' -or -not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
+        throw 'Package must name an existing local .tgz file.'
+    }
+    $installTarget = $packagePath
 }
 $harnessRoot = [IO.Path]::GetFullPath([string]$runtime.harnessHome)
 $profilesRoot = Join-Path $harnessRoot 'profiles'
@@ -84,12 +95,13 @@ $plan = [ordered]@{
     profile = $Profile
     profilePath = $profilePath
     package = $packagePath
+    source = $(if ($Source) { $Source } else { $null })
     runtimeVersion = $runtime.runtimeVersion
     backupPath = $backupPath
     restartsDesktop = $false
     initializesWebTemplate = $initializesWebTemplate
 }
-if (-not $PSCmdlet.ShouldProcess($profilePath, 'Back up existing profile configuration and install the local Zeta package with the official DSH CLI')) {
+if (-not $PSCmdlet.ShouldProcess($profilePath, 'Back up existing profile configuration and install Zeta with the official DSH CLI')) {
     $plan | ConvertTo-Json
     return
 }
@@ -131,7 +143,7 @@ try {
         $initializeExitCode = Invoke-DshProcess ([string]$runtime.executable) @('-e', $initializeEntry)
         if ($initializeExitCode -ne 0) { throw "DSH Web test profile initialization failed (exit $initializeExitCode). Configuration backup: $backupPath" }
     }
-    $cliArgs = @([string]$runtime.cliPath, 'plugin', '--profile', $Profile, 'add', $packagePath)
+    $cliArgs = @([string]$runtime.cliPath, 'plugin', '--profile', $Profile, 'add', $installTarget)
     if ($Profile -eq 'desktop') {
         # rc.3 reserves desktop for its installed carrier. Use the carrier's
         # official CLI and package-manager options. Its bundled pnpm must match
@@ -142,7 +154,7 @@ try {
         $env:ZETA_DSH_RUNTIME_BIN = Join-Path $desktopResources 'runtime\bin'
         if (-not (Test-Path -LiteralPath $env:ZETA_DSH_PNPM_ENTRY -PathType Leaf)) { throw 'Desktop bundled pnpm was not found; refusing to substitute a different package-manager version.' }
         $desktopEntry = 'process.argv.splice(1,0,process.env.ZETA_DSH_CLI_PATH); import(require("node:url").pathToFileURL(process.env.ZETA_DSH_CLI_PATH).href).then(m=>m.runCli({manageDesktopProfile:true,packageManager:{command:process.execPath,args:["--expose-internals",process.env.ZETA_DSH_PNPM_ENTRY],env:{ELECTRON_RUN_AS_NODE:"1",DSH_DESKTOP_NODE_EXECUTABLE:process.execPath,PATH:process.env.ZETA_DSH_RUNTIME_BIN+require("node:path").delimiter+process.env.PATH}}})).catch(e=>{console.error(e.message);process.exitCode=1})'
-        $cliArgs = @('-e', $desktopEntry, '--', 'plugin', '--profile', $Profile, 'add', $packagePath)
+        $cliArgs = @('-e', $desktopEntry, '--', 'plugin', '--profile', $Profile, 'add', $installTarget)
     }
     $installExitCode = Invoke-DshProcess ([string]$runtime.executable) $cliArgs
     if ($installExitCode -ne 0) { throw "DSH plugin installation failed (exit $installExitCode). Configuration backup: $backupPath" }

@@ -1,6 +1,6 @@
 {
   "name": "dsh-feiyu-zeta",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "icon": "./assets/icons/qq_logo.svg",
   "description": "dsh-feiyu-zeta：个人测试自用的 DeepSeek Harness QQ 陪伴插件，集成人设与习惯演变、记忆、共享表情、语音、自主活动和云端创作工具。",
   "type": "module",
@@ -28,7 +28,8 @@
     "prepublishOnly": "npm run build",
     "test": "vitest run --config ./vitest.config.ts",
     "typecheck:client": "tsc -p tsconfig.client.json",
-    "check": "tsc --noEmit && tsc -p tsconfig.client.json"
+    "check": "tsc --noEmit && tsc -p tsconfig.client.json",
+    "check:distribution": "node scripts/check-distribution.mjs"
   },
   "keywords": [
     "deepseek-harness",
@@ -45,7 +46,8 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=24.9.0"
+    "node": ">=24.9.0",
+    "dsh": "0.2.1-rc.3"
   },
   "dsh": {
     "bundle": {
@@ -150,6 +152,8 @@
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
+    "VALIDATION.md",
+    "scripts/check-distribution.mjs",
     "scripts/install-local.ps1",
     "scripts/inspect-local-runtime.cjs"
   ],
