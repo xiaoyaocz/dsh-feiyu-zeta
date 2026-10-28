@@ -12,10 +12,10 @@
 
 官方 DSH rc.3 / pnpm 11 的两条 Git 安装路径均已完成实际验证：
 
-- 本地 `git+file` 全离线安装正式 0.4.4 固定提交，132 项检查通过，结果位于 `output/host-git-local-0.4.4/summary.json`。
-- 直接从 GitHub 安装 [`296f2d08042c7a11160e43c35bc4b8b127103a29`](https://github.com/xiaoyaocz/dsh-feiyu-zeta/commit/296f2d08042c7a11160e43c35bc4b8b127103a29)，132 项检查通过，结果位于 `output/host-github-0.4.4/summary.json`。锁文件记录了指定提交，首次运行 84 项、重启 36 项及安装产物 12 项均通过；宿主入口、设置页模块标识、语言资源、Schedule 包装入口、24 张表情均完整。
+- 本地 `git+file` 全离线安装初版 0.4.4 固定提交，132 项检查通过，结果位于 `output/host-git-local-0.4.4/summary.json`。
+- 直接从 GitHub 安装 [`e6167c20b07cf2cc404d7f486d668f603c84dad3`](https://github.com/xiaoyaocz/dsh-feiyu-zeta/commit/e6167c20b07cf2cc404d7f486d668f603c84dad3)，132 项检查通过，结果位于 `output/host-github-0.4.4-final/summary.json`。锁文件记录了指定提交，首次运行 84 项、重启 36 项及安装产物 12 项均通过；宿主入口、设置页模块标识、语言资源、Schedule 包装入口、24 张表情均完整。
 
-两条路径均未使用安装编译钩子或构建审批，首次运行调用本地假模型 14 次、重启零次，没有发送真实 QQ 消息或调用收费服务。日常 profile 未被修改。首次 Linux CI 发现旧 npm 锁文件混入本地 pnpm 链接，Windows 父目录依赖掩盖了缺包。已从仅含 package.json 的干净目录重新生成纯 registry 锁文件，并用 npm ci --ignore-scripts 安装的独立副本通过类型检查、507 项测试及 12 项分发检查器测试；二维码终端依赖确认位于该副本内。检查器新增锁文件回归检查。使用新锁文件重建后的页面通过 83 项浏览器检查。Linux / Node 24 的干净构建一致性由 [GitHub CI](https://github.com/xiaoyaocz/dsh-feiyu-zeta/actions) 继续核验。
+两条路径均未使用安装编译钩子或构建审批，首次运行调用本地假模型 14 次、重启零次，没有发送真实 QQ 消息或调用收费服务。日常 profile 未被修改。首次 Linux CI 发现旧 npm 锁文件混入本地 pnpm 链接，Windows 父目录依赖掩盖了缺包。已从仅含 package.json 的干净目录重新生成纯 registry 锁文件，并用 npm ci --ignore-scripts 安装的独立副本通过类型检查、507 项测试及 12 项分发检查器测试；二维码终端依赖确认位于该副本内。检查器新增锁文件回归检查。使用新锁文件重建后的页面通过 83 项浏览器检查。[Linux / Node 24 GitHub CI](https://github.com/xiaoyaocz/dsh-feiyu-zeta/actions/runs/40743445589) 已全部通过，包括 Git 归档无依赖检查、纯净依赖安装、507 项测试、12 项检查器测试、清空产物后重建、提交产物一致性和实际 npm 归档检查。
 
 可复跑正式 GitHub 验证：
 
